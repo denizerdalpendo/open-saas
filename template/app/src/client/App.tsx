@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { Outlet, useLocation } from "react-router";
+import { useAuth } from "wasp/client/auth";
 import { routes } from "wasp/client/router";
 import { Toaster } from "../client/components/ui/toaster";
 import "./Main.css";
@@ -16,6 +17,8 @@ import CookieConsentBanner from "./components/cookie-consent/Banner";
  */
 export default function App() {
   const location = useLocation();
+  const { data: user } = useAuth();
+
   const isMarketingPage = useMemo(() => {
     return (
       location.pathname === "/" || location.pathname.startsWith("/pricing")
@@ -36,6 +39,37 @@ export default function App() {
   const isAdminDashboard = useMemo(() => {
     return location.pathname.startsWith("/admin");
   }, [location]);
+
+  // Initialize Pendo Analytics
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.pendo) {
+      // Initialize with anonymous ID on load
+      if (!user) {
+        window.pendo.initialize({
+          visitor: {
+            id: 'ANONYMOUS_VISITOR_ID'
+          }
+        });
+      } else {
+        // Identify with actual user data after authentication
+        window.pendo.identify({
+          visitor: {
+            // Standard fields
+            id: user.id,
+            email: user.email || user.username,
+
+            // Important visitor metadata fields for segmentation and analytics
+            isAdmin: user.isAdmin,
+            subscriptionStatus: user.subscriptionStatus,
+            subscriptionPlan: user.subscriptionPlan,
+            credits: user.credits,
+            createdAt: user.createdAt,
+            datePaid: user.datePaid,
+          }
+        });
+      }
+    }
+  }, [user]);
 
   useEffect(() => {
     if (location.hash) {
