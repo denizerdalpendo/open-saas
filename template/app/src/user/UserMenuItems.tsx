@@ -33,6 +33,29 @@ export const UserMenuItems = ({
       <li>
         <button
           onClick={() => {
+            // Track user_logout event
+            if (typeof window !== 'undefined' && (window as any).pendo && user) {
+              // Calculate session duration from localStorage or session storage
+              const sessionStartKey = `session_start_${user.id}`;
+              const sessionStart = localStorage.getItem(sessionStartKey);
+              let sessionDurationMinutes = 0;
+
+              if (sessionStart) {
+                const now = new Date();
+                const startTime = new Date(sessionStart);
+                sessionDurationMinutes = Math.floor((now.getTime() - startTime.getTime()) / (1000 * 60));
+              }
+
+              (window as any).pendo.track("user_logout", {
+                user_id: user.id,
+                session_duration_minutes: sessionDurationMinutes,
+                actions_performed_in_session: "unknown"
+              });
+
+              // Clean up session tracking
+              localStorage.removeItem(sessionStartKey);
+            }
+
             logout();
             onItemClick?.();
           }}

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { getCustomerPortalUrl, useQuery } from "wasp/client/operations";
 import { Link as WaspRouterLink, routes } from "wasp/client/router";
 import type { User } from "wasp/entities";
@@ -17,6 +18,19 @@ import {
 } from "../payment/plans";
 
 export default function AccountPage({ user }: { user: User }) {
+  // Track account page viewed event
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("account_page_viewed", {
+        user_id: user.id,
+        subscription_status: user.subscriptionStatus || "none",
+        credits_remaining: user.credits || 0,
+        is_admin: user.isAdmin || false,
+        has_subscription: !!user.subscriptionStatus && user.subscriptionStatus !== "deleted"
+      });
+    }
+  }, []);
+
   return (
     <div className="mt-10 px-6">
       <Card className="mb-4 lg:m-8">
