@@ -54,9 +54,17 @@ export default function App() {
         // Identify with actual user data after authentication
         window.pendo.identify({
           visitor: {
+            // Standard fields
             id: user.id,
             email: user.email || user.username,
+
+            // Important visitor metadata fields for segmentation and analytics
             isAdmin: user.isAdmin,
+            subscriptionStatus: user.subscriptionStatus,
+            subscriptionPlan: user.subscriptionPlan,
+            credits: user.credits,
+            createdAt: user.createdAt,
+            datePaid: user.datePaid,
           }
         });
       }
