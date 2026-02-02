@@ -39,10 +39,30 @@ export const updateIsUserAdminById: UpdateIsUserAdminById<
     );
   }
 
-  return context.entities.User.update({
+  // Get the user's current admin status before updating
+  const targetUser = await context.entities.User.findUnique({
+    where: { id },
+    select: { isAdmin: true },
+  });
+
+  const updatedUser = await context.entities.User.update({
     where: { id },
     data: { isAdmin },
   });
+
+  // Track admin_user_role_updated event
+  // Note: This is a server-side operation. To track this in Pendo, you would need to:
+  // 1. Use Pendo's Track Events API
+  // 2. Send the event data to your client-side application
+  // 3. Store the event and batch send to Pendo
+  console.log('Pendo Track Event: admin_user_role_updated', {
+    admin_user_id: context.user.id,
+    target_user_id: id,
+    new_admin_status: isAdmin,
+    previous_admin_status: targetUser?.isAdmin || false
+  });
+
+  return updatedUser;
 };
 
 type GetPaginatedUsersOutput = {
