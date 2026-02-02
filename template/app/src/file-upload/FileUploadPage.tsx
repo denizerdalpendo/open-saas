@@ -119,6 +119,16 @@ export default function FileUploadPage() {
 
       const file = validateFile(formDataFileUpload);
 
+      // Track file upload initiated event
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("file_upload_initiated", {
+          user_id: user?.id || "unknown",
+          file_type: file.type,
+          file_size_bytes: file.size,
+          file_name: file.name
+        });
+      }
+
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
         fileName: file.name,
@@ -159,6 +169,26 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+
+      // Track file upload failed event
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        const formElement = e.target;
+        if (formElement instanceof HTMLFormElement) {
+          const formData = new FormData(formElement);
+          const formDataFileUpload = formData.get("file-upload");
+          if (formDataFileUpload instanceof File) {
+            (window as any).pendo.track("file_upload_failed", {
+              user_id: user?.id || "unknown",
+              file_type: formDataFileUpload.type,
+              file_size_bytes: formDataFileUpload.size,
+              file_name: formDataFileUpload.name,
+              error_message: errorMessage,
+              error_type: error instanceof Error ? error.name : "unknown"
+            });
+          }
+        }
+      }
+
       toast({
         title: "Error uploading file",
         description: errorMessage,

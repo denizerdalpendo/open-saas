@@ -339,17 +339,18 @@ function Todo({ id, isDone, description, time }: TodoProps) {
   const { data: user } = useAuth();
 
   const handleCheckboxChange = async (checked: boolean) => {
-    // Track task_completed event
-    if (typeof window !== 'undefined' && (window as any).pendo && checked) {
+    // Track task_updated event
+    if (typeof window !== 'undefined' && (window as any).pendo) {
       const taskCreatedAt = new Date(); // In a real app, you'd get this from the task object
       const now = new Date();
       const taskAgeMinutes = Math.floor((now.getTime() - taskCreatedAt.getTime()) / (1000 * 60));
 
-      (window as any).pendo.track("task_completed", {
+      (window as any).pendo.track("task_updated", {
         user_id: user?.id || "unknown",
         task_id: id,
-        is_completed: checked,
-        task_age_minutes: taskAgeMinutes
+        is_done: checked,
+        time_allocated: time || "unknown",
+        update_type: checked ? "marked_done" : "marked_not_done"
       });
     }
 
