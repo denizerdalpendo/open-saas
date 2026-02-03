@@ -1,5 +1,5 @@
 import { CheckCircle } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "wasp/client/auth";
 import {
@@ -71,6 +71,19 @@ const PricingPage = () => {
 
   const navigate = useNavigate();
 
+  // Track pricing page visited event
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("pricing_page_visited", {
+        user_id: user?.id || "anonymous",
+        referrer_page: document.referrer || "direct",
+        is_authenticated: !!user,
+        has_subscription: isUserSubscribed,
+        credits_balance: user?.credits || 0
+      });
+    }
+  }, []);
+
   async function handleBuyNowClick(paymentPlanId: PaymentPlanId) {
     if (!user) {
       navigate("/login");
@@ -82,6 +95,17 @@ const PricingPage = () => {
       const checkoutResults = await generateCheckoutSession(paymentPlanId);
 
       if (checkoutResults?.sessionUrl) {
+        // Track checkout initiated event
+        if (typeof window !== 'undefined' && (window as any).pendo) {
+          (window as any).pendo.track("checkout_initiated", {
+            plan_id: paymentPlanId,
+            plan_name: prettyPaymentPlanName(paymentPlanId),
+            plan_price: paymentPlanCards[paymentPlanId].price,
+            user_id: user.id,
+            has_existing_subscription: isUserSubscribed
+          });
+        }
+
         window.open(checkoutResults.sessionUrl, "_self");
       } else {
         throw new Error("Error generating checkout session URL");
@@ -111,6 +135,16 @@ const PricingPage = () => {
     if (!customerPortalUrl) {
       setErrorMessage(`Customer Portal does not exist for user ${user.id}`);
       return;
+    }
+
+    // Track customer portal accessed event
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("customer_portal_accessed", {
+        user_id: user.id,
+        subscription_status: user.subscriptionStatus || "none",
+        has_active_subscription: isUserSubscribed,
+        source_page: "pricing"
+      });
     }
 
     window.open(customerPortalUrl, "_blank");

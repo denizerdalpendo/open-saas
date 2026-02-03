@@ -59,6 +59,15 @@ const getConfig = () => {
             label: "Google Analytics",
             onAccept: () => {
               try {
+                // Track cookie_consent_accepted event
+                if (typeof window !== 'undefined' && (window as any).pendo) {
+                  (window as any).pendo.track("cookie_consent_accepted", {
+                    user_id: (window as any).pendo?.get_visitor_id?.() || "anonymous",
+                    consent_categories_accepted: "analytics,necessary",
+                    is_authenticated: !!(window as any).pendo?.get_visitor_id?.()
+                  });
+                }
+
                 const GA_ANALYTICS_ID = import.meta.env
                   .REACT_APP_GOOGLE_ANALYTICS_ID;
                 if (!GA_ANALYTICS_ID.length) {
