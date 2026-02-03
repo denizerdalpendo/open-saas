@@ -188,6 +188,14 @@ function NewTaskForm({
             credits_remaining: user?.credits || 0,
             failure_reason: "out_of_credits"
           });
+
+          // Track out_of_credits_notification event
+          (window as any).pendo.track("out_of_credits_notification", {
+            user_id: user?.id || "unknown",
+            feature_attempted: "ai_schedule_generation",
+            subscription_status: user?.subscriptionStatus || "none",
+            credits_remaining: user?.credits || 0
+          });
         }
 
         toast({
@@ -339,18 +347,18 @@ function Todo({ id, isDone, description, time }: TodoProps) {
   const { data: user } = useAuth();
 
   const handleCheckboxChange = async (checked: boolean) => {
-    // Track task_updated event
-    if (typeof window !== 'undefined' && (window as any).pendo) {
+    // Track task_completed event when marking done
+    if (typeof window !== 'undefined' && (window as any).pendo && checked) {
       const taskCreatedAt = new Date(); // In a real app, you'd get this from the task object
       const now = new Date();
       const taskAgeMinutes = Math.floor((now.getTime() - taskCreatedAt.getTime()) / (1000 * 60));
 
-      (window as any).pendo.track("task_updated", {
+      (window as any).pendo.track("task_completed", {
         user_id: user?.id || "unknown",
         task_id: id,
-        is_done: checked,
-        time_allocated: time || "unknown",
-        update_type: checked ? "marked_done" : "marked_not_done"
+        task_description: description,
+        time_to_complete_minutes: taskAgeMinutes,
+        time_allocated: time || "unknown"
       });
     }
 

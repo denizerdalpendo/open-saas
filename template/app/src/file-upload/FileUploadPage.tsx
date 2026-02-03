@@ -147,15 +147,17 @@ export default function FileUploadPage() {
         fileName: file.name,
       });
 
-      // Track file uploaded event
+      // Track file upload completed event
       const uploadDuration = Date.now() - uploadStartTime;
       if (typeof window !== 'undefined' && (window as any).pendo) {
-        (window as any).pendo.track("file_uploaded", {
+        (window as any).pendo.track("file_upload_completed", {
           user_id: user?.id || "unknown",
           file_type: file.type,
           file_size_bytes: file.size,
           file_name: file.name,
-          upload_duration_ms: uploadDuration
+          s3_key: s3Key,
+          upload_duration_ms: uploadDuration,
+          total_files_count: (allUserFiles.data?.length || 0) + 1
         });
       }
 
