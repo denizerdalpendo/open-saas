@@ -3,9 +3,25 @@ import { Link as WaspRouterLink, routes } from "wasp/client/router";
 import { AuthPageLayout } from "./AuthPageLayout";
 
 export default function Login() {
+  // Track successful login
+  const handleLoginSuccess = () => {
+    const loginMethod = "email"; // Default method
+    const deviceType = /Mobile|Android|iPhone/i.test(navigator.userAgent) ? "mobile" : "desktop";
+
+    // Track user login event
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("user_logged_in", {
+        login_method: loginMethod,
+        auth_provider: loginMethod,
+        days_since_last_login: 0, // Could be calculated server-side
+        device_type: deviceType
+      });
+    }
+  };
+
   return (
     <AuthPageLayout>
-      <LoginForm />
+      <LoginForm onSuccess={handleLoginSuccess} />
       <br />
       <span className="text-sm font-medium text-gray-900 dark:text-gray-900">
         Don't have an account yet?{" "}
