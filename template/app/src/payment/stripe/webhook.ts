@@ -117,6 +117,25 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+
+      // Track Pendo event: credits_purchased
+      // Note: Server-side tracking requires using Pendo's Track Events API
+      // POST to https://app.pendo.io/api/v1/track
+      // See: https://help.pendo.io/s/track-events-api
+      /*
+      trackPendoEvent({
+        visitorId: customerId, // or user email/ID
+        accountId: customerId,
+        eventName: "credits_purchased",
+        properties: {
+          credits_amount: paymentPlans[paymentPlanId].effect.amount,
+          payment_plan_id: paymentPlanId,
+          price: invoice.amount_paid / 100, // Convert from cents
+          customer_id: customerId,
+          payment_processor: "stripe"
+        }
+      });
+      */
       break;
     case PaymentPlanId.Pro:
     case PaymentPlanId.Hobby:
@@ -129,6 +148,26 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+
+      // Track Pendo event: subscription_created
+      // Note: Server-side tracking requires using Pendo's Track Events API
+      /*
+      trackPendoEvent({
+        visitorId: customerId,
+        accountId: customerId,
+        eventName: "subscription_created",
+        properties: {
+          payment_plan_id: paymentPlanId,
+          payment_plan_name: paymentPlans[paymentPlanId].effect.kind,
+          subscription_status: SubscriptionStatus.Active,
+          customer_id: customerId,
+          payment_processor: "stripe",
+          amount: invoice.amount_paid / 100,
+          currency: invoice.currency,
+          billing_interval: "monthly" // or extract from plan
+        }
+      });
+      */
       break;
     default:
       assertUnreachable(paymentPlanId);
@@ -168,10 +207,34 @@ async function handleCustomerSubscriptionUpdated(
     getSubscriptionPriceId(subscription),
   );
 
+  // Get previous status for tracking
+  const previousUser = await prismaUserDelegate.findUnique({
+    where: { paymentProcessorUserId: customerId },
+    select: { subscriptionStatus: true }
+  });
+
   const user = await updateUserSubscription(
     { paymentProcessorUserId: customerId, paymentPlanId, subscriptionStatus },
     prismaUserDelegate,
   );
+
+  // Track Pendo event: subscription_updated
+  // Note: Server-side tracking requires using Pendo's Track Events API
+  /*
+  trackPendoEvent({
+    visitorId: customerId,
+    accountId: customerId,
+    eventName: "subscription_updated",
+    properties: {
+      previous_status: previousUser?.subscriptionStatus || "unknown",
+      new_status: subscriptionStatus,
+      payment_plan_id: paymentPlanId,
+      customer_id: customerId,
+      cancel_at_period_end: subscription.cancel_at_period_end,
+      payment_processor: "stripe"
+    }
+  });
+  */
 
   if (subscription.cancel_at_period_end && user.email) {
     await emailSender.send({
@@ -235,6 +298,16 @@ async function handleCustomerSubscriptionDeleted(
   const subscription = event.data.object;
   const customerId = getCustomerId(subscription.customer);
 
+  // Get user data before deletion for tracking
+  const user = await prismaUserDelegate.findUnique({
+    where: { paymentProcessorUserId: customerId },
+    select: {
+      subscriptionPlan: true,
+      datePaid: true,
+      subscriptionStatus: true
+    }
+  });
+
   await updateUserSubscription(
     {
       paymentProcessorUserId: customerId,
@@ -242,6 +315,28 @@ async function handleCustomerSubscriptionDeleted(
     },
     prismaUserDelegate,
   );
+
+  // Track Pendo event: subscription_canceled
+  // Note: Server-side tracking requires using Pendo's Track Events API
+  /*
+  const subscriptionDuration = user?.datePaid
+    ? Math.floor((Date.now() - new Date(user.datePaid).getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
+
+  trackPendoEvent({
+    visitorId: customerId,
+    accountId: customerId,
+    eventName: "subscription_canceled",
+    properties: {
+      payment_plan_id: user?.subscriptionPlan || "unknown",
+      customer_id: customerId,
+      cancellation_reason: "", // Could extract from metadata if available
+      subscription_duration: subscriptionDuration,
+      lifetime_value: 0, // Would need to calculate from payment history
+      payment_processor: "stripe"
+    }
+  });
+  */
 }
 
 function getCustomerId(

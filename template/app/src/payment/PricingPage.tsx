@@ -1,5 +1,5 @@
 import { CheckCircle } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "wasp/client/auth";
 import {
@@ -71,11 +71,53 @@ const PricingPage = () => {
 
   const navigate = useNavigate();
 
+  // Track pricing page view
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const utmSource = urlParams.get('utm_source') || '';
+      const utmMedium = urlParams.get('utm_medium') || '';
+      const utmCampaign = urlParams.get('utm_campaign') || '';
+
+      (window as any).pendo.track("pricing_page_viewed", {
+        source_page: document.referrer || "direct",
+        referrer: document.referrer,
+        is_authenticated: !!user,
+        current_subscription_status: user?.subscriptionStatus || "none",
+        utm_parameters: `source:${utmSource},medium:${utmMedium},campaign:${utmCampaign}`
+      });
+    }
+  }, [user]);
+
   async function handleBuyNowClick(paymentPlanId: PaymentPlanId) {
     if (!user) {
+      // Track unauthenticated checkout attempt
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("unauthenticated_checkout_attempt", {
+          payment_plan_id: paymentPlanId,
+          payment_plan_name: paymentPlanCards[paymentPlanId].name,
+          plan_price: paymentPlanCards[paymentPlanId].price,
+          source_page: "pricing",
+          referrer: document.referrer || "direct"
+        });
+      }
       navigate("/login");
       return;
     }
+
+    // Track checkout initiated
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("checkout_initiated", {
+        payment_plan_id: paymentPlanId,
+        payment_plan_name: paymentPlanCards[paymentPlanId].name,
+        plan_price: paymentPlanCards[paymentPlanId].price,
+        is_subscription: paymentPlans[paymentPlanId].effect.kind === "subscription",
+        payment_processor: "stripe", // Or detect based on configuration
+        user_status: user.subscriptionStatus || "none",
+        has_previous_subscription: user.subscriptionStatus !== SubscriptionStatus.Deleted && !!user.subscriptionStatus
+      });
+    }
+
     try {
       setIsPaymentLoading(true);
 
@@ -111,6 +153,16 @@ const PricingPage = () => {
     if (!customerPortalUrl) {
       setErrorMessage(`Customer Portal does not exist for user ${user.id}`);
       return;
+    }
+
+    // Track customer portal access
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("customer_portal_accessed", {
+        source_page: "pricing",
+        subscription_status: user.subscriptionStatus || "none",
+        payment_plan_id: "", // Would need to extract from user data
+        days_until_renewal: 0 // Would need to calculate from subscription data
+      });
     }
 
     window.open(customerPortalUrl, "_blank");
