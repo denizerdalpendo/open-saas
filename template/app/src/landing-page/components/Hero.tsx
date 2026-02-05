@@ -4,6 +4,12 @@ import openSaasBannerDark from "../../client/static/open-saas-banner-dark.svg";
 import openSaasBannerLight from "../../client/static/open-saas-banner-light.svg";
 
 export default function Hero() {
+  const trackPendoEvent = (eventName: string) => {
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track(eventName);
+    }
+  };
+
   return (
     <div className="relative w-full pt-14">
       <TopGradient />
@@ -12,20 +18,26 @@ export default function Hero() {
         <div className="max-w-8xl mx-auto px-6 lg:px-8">
           <div className="lg:mb-18 mx-auto max-w-3xl text-center">
             <h1 className="text-foreground text-5xl font-bold sm:text-6xl">
-              Some <span className="italic">cool</span> words about{" "}
-              <span className="text-gradient-primary">your product</span>
+              Build Your <span className="italic">AI-Powered</span>{" "}
+              <span className="text-gradient-primary">SaaS App</span> Today
             </h1>
             <p className="text-muted-foreground mx-auto mt-6 max-w-2xl text-lg leading-8">
-              With some more exciting words about your product!
+              Get started with your own AI-powered day scheduler. Sign up now and experience intelligent task management with just a few clicks.
             </p>
             <div className="mt-10 flex items-center justify-center gap-x-6">
               <Button size="lg" variant="outline" asChild>
-                <WaspRouterLink to={routes.PricingPageRoute.to}>
+                <WaspRouterLink
+                  to={routes.PricingPageRoute.to}
+                  onClick={() => trackPendoEvent('LearnMoreClicked')}
+                >
                   Learn More
                 </WaspRouterLink>
               </Button>
               <Button size="lg" variant="default" asChild>
-                <WaspRouterLink to={routes.SignupRoute.to}>
+                <WaspRouterLink
+                  to={routes.SignupRoute.to}
+                  onClick={() => trackPendoEvent('GetStartedClicked')}
+                >
                   Get Started <span aria-hidden="true">→</span>
                 </WaspRouterLink>
               </Button>

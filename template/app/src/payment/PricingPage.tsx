@@ -77,6 +77,12 @@ const PricingPage = () => {
       return;
     }
     try {
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track('BuyNowClicked', {
+          planId: paymentPlanId,
+          planName: prettyPaymentPlanName(paymentPlanId)
+        });
+      }
       setIsPaymentLoading(true);
 
       const checkoutResults = await generateCheckoutSession(paymentPlanId);
