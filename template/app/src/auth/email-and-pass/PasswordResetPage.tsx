@@ -5,7 +5,17 @@ import { AuthPageLayout } from "../AuthPageLayout";
 export function PasswordResetPage() {
   return (
     <AuthPageLayout>
-      <ResetPasswordForm />
+      <ResetPasswordForm
+        onSuccess={(data: any) => {
+          // Track password reset completed event
+          if (typeof window !== 'undefined' && (window as any).pendo) {
+            (window as any).pendo.track("password_reset_completed", {
+              user_id: data?.userId || "unknown",
+              email: data?.email || "unknown"
+            });
+          }
+        }}
+      />
       <br />
       <span className="text-sm font-medium text-gray-900">
         If everything is okay,{" "}

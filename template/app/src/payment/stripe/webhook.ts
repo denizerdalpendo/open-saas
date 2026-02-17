@@ -109,7 +109,7 @@ async function handleInvoicePaid(
 
   switch (paymentPlanId) {
     case PaymentPlanId.Credits10:
-      await updateUserCredits(
+      const updatedUserCredits = await updateUserCredits(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -117,10 +117,23 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+
+      // Track credits_purchased event
+      // Note: This is a server-side webhook event. To track this in Pendo, you would need to:
+      // 1. Use Pendo's Track Events API (https://support.pendo.io/hc/en-us/articles/360032294291)
+      // 2. Send the event data to your client-side application to track via pendo.track()
+      // 3. Store the event and batch send to Pendo
+      console.log('Pendo Track Event: credits_purchased', {
+        user_id: updatedUserCredits?.id,
+        credits_amount: paymentPlans[paymentPlanId].effect.amount,
+        purchase_price: invoice.amount_paid / 100,
+        payment_processor: "stripe",
+        credits_balance_after: updatedUserCredits?.credits
+      });
       break;
     case PaymentPlanId.Pro:
     case PaymentPlanId.Hobby:
-      await updateUserSubscription(
+      const updatedUser = await updateUserSubscription(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -129,6 +142,17 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+
+      // Track subscription_created event
+      // Note: This is a server-side webhook event. See comment above for tracking options.
+      console.log('Pendo Track Event: subscription_created', {
+        plan_id: paymentPlanId,
+        plan_name: paymentPlans[paymentPlanId].getDisplayName(),
+        user_id: updatedUser?.id,
+        payment_processor: "stripe",
+        subscription_amount: invoice.amount_paid / 100,
+        billing_period: "monthly"
+      });
       break;
     default:
       assertUnreachable(paymentPlanId);
@@ -156,6 +180,7 @@ async function handleCustomerSubscriptionUpdated(
   prismaUserDelegate: PrismaClient["user"],
 ): Promise<void> {
   const subscription = event.data.object;
+  const previousAttributes = event.data.previous_attributes;
 
   // There are other subscription statuses, such as `trialing` that we are not handling.
   const subscriptionStatus = getOpenSaasSubscriptionStatus(subscription);
@@ -172,6 +197,17 @@ async function handleCustomerSubscriptionUpdated(
     { paymentProcessorUserId: customerId, paymentPlanId, subscriptionStatus },
     prismaUserDelegate,
   );
+
+  // Track subscription_updated event
+  // Note: This is a server-side webhook event. See credits_purchased comment for tracking options.
+  console.log('Pendo Track Event: subscription_updated', {
+    user_id: user?.id,
+    old_plan_id: previousAttributes?.items?.data?.[0]?.price?.id || "unknown",
+    new_plan_id: paymentPlanId,
+    subscription_status: subscriptionStatus,
+    is_cancel_at_period_end: subscription.cancel_at_period_end,
+    payment_processor: "stripe"
+  });
 
   if (subscription.cancel_at_period_end && user.email) {
     await emailSender.send({
@@ -235,13 +271,29 @@ async function handleCustomerSubscriptionDeleted(
   const subscription = event.data.object;
   const customerId = getCustomerId(subscription.customer);
 
-  await updateUserSubscription(
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: customerId,
       subscriptionStatus: SubscriptionStatus.Deleted,
     },
     prismaUserDelegate,
   );
+
+  // Track subscription_canceled event
+  // Note: This is a server-side webhook event. See credits_purchased comment for tracking options.
+  const subscriptionCreatedAt = subscription.created ? new Date(subscription.created * 1000) : new Date();
+  const now = new Date();
+  const durationDays = Math.floor((now.getTime() - subscriptionCreatedAt.getTime()) / (1000 * 60 * 60 * 24));
+
+  console.log('Pendo Track Event: subscription_canceled', {
+    user_id: user?.id,
+    plan_id: subscription.items.data[0]?.price?.id || "unknown",
+    plan_name: "unknown",
+    cancellation_reason: subscription.cancellation_details?.reason || "unknown",
+    subscription_duration_days: durationDays,
+    total_revenue: "unknown",
+    payment_processor: "stripe"
+  });
 }
 
 function getCustomerId(
