@@ -14,6 +14,7 @@ import {
   SubscriptionStatus,
 } from "../plans";
 import { updateUserCredits, updateUserSubscription } from "../user";
+import { pendoTrackEvent } from "../../server/pendoTrack";
 import { stripeClient } from "./stripeClient";
 
 /**
@@ -46,12 +47,59 @@ export const stripeWebhook: PaymentsWebhook = async (
     switch (event.type) {
       case "invoice.paid":
         await handleInvoicePaid(event, prismaUserDelegate);
+        {
+          const invoice = event.data.object;
+          const paidCustomerId = getCustomerId(invoice.customer);
+          const paidPaymentPlanId = getPaymentPlanIdByPaymentProcessorPlanId(
+            getInvoicePriceId(invoice),
+          );
+          pendoTrackEvent({
+            event: "payment_received",
+            visitorId: paidCustomerId,
+            properties: {
+              paymentPlanId: paidPaymentPlanId,
+              paymentType: paidPaymentPlanId === PaymentPlanId.Credits10 ? "credits" : "subscription",
+              customerId: paidCustomerId,
+              invoicePaidAt: invoice.status_transitions.paid_at
+                ? new Date(invoice.status_transitions.paid_at * 1000).toISOString()
+                : "",
+            },
+          });
+        }
         break;
       case "customer.subscription.updated":
         await handleCustomerSubscriptionUpdated(event, prismaUserDelegate);
+        {
+          const subscription = event.data.object;
+          const subCustomerId = getCustomerId(subscription.customer);
+          const subStatus = getOpenSaasSubscriptionStatus(subscription);
+          pendoTrackEvent({
+            event: "subscription_updated",
+            visitorId: subCustomerId,
+            properties: {
+              subscriptionStatus: subStatus || "unknown",
+              paymentPlanId: getPaymentPlanIdByPaymentProcessorPlanId(
+                getSubscriptionPriceId(subscription),
+              ),
+              customerId: subCustomerId,
+              cancelAtPeriodEnd: subscription.cancel_at_period_end,
+            },
+          });
+        }
         break;
       case "customer.subscription.deleted":
         await handleCustomerSubscriptionDeleted(event, prismaUserDelegate);
+        {
+          const deletedSubscription = event.data.object;
+          const deletedCustomerId = getCustomerId(deletedSubscription.customer);
+          pendoTrackEvent({
+            event: "subscription_deleted",
+            visitorId: deletedCustomerId,
+            properties: {
+              customerId: deletedCustomerId,
+            },
+          });
+        }
         break;
       default:
         throw new UnhandledWebhookEventError(event.type);
@@ -117,6 +165,15 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      pendoTrackEvent({
+        event: "credits_purchased",
+        visitorId: customerId,
+        properties: {
+          numOfCreditsPurchased: paymentPlans[paymentPlanId].effect.amount,
+          customerId,
+          datePaid: invoicePaidAtDate.toISOString(),
+        },
+      });
       break;
     case PaymentPlanId.Pro:
     case PaymentPlanId.Hobby:

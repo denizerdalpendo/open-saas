@@ -7,6 +7,7 @@ import {
 } from "wasp/server/operations";
 import * as z from "zod";
 import { SubscriptionStatus } from "../payment/plans";
+import { pendoTrackEvent } from "../server/pendoTrack";
 import { ensureArgsSchemaOrThrowHttpError } from "../server/validation";
 
 const updateUserAdminByIdInputSchema = z.object({
@@ -39,10 +40,22 @@ export const updateIsUserAdminById: UpdateIsUserAdminById<
     );
   }
 
-  return context.entities.User.update({
+  const updatedUser = await context.entities.User.update({
     where: { id },
     data: { isAdmin },
   });
+
+  pendoTrackEvent({
+    event: "user_admin_status_changed",
+    visitorId: context.user.id,
+    properties: {
+      targetUserId: id,
+      isAdmin,
+      adminUserId: context.user.id,
+    },
+  });
+
+  return updatedUser;
 };
 
 type GetPaginatedUsersOutput = {
