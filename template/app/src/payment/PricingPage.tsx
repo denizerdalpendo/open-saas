@@ -82,6 +82,13 @@ const PricingPage = () => {
       const checkoutResults = await generateCheckoutSession(paymentPlanId);
 
       if (checkoutResults?.sessionUrl) {
+        const planCard = paymentPlanCards[paymentPlanId];
+        pendo.track("checkout_session_initiated", {
+          paymentPlanId,
+          planName: planCard.name,
+          planPrice: planCard.price,
+          planType: paymentPlans[paymentPlanId].effect.kind,
+        });
         window.open(checkoutResults.sessionUrl, "_self");
       } else {
         throw new Error("Error generating checkout session URL");

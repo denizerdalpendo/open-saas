@@ -67,6 +67,10 @@ export default function FileUploadPage() {
               });
               return;
             case "success":
+              pendo.track("file_downloaded", {
+                fileKey: fileKeyForS3,
+                fileName: allUserFiles.data?.find((f: File) => f.s3Key === fileKeyForS3)?.name || "unknown",
+              });
               window.open(urlQuery.data, "_blank");
               return;
           }
@@ -78,6 +82,8 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    let uploadFileName = "unknown";
+    let uploadFileType = "unknown";
     try {
       e.preventDefault();
 
@@ -103,6 +109,8 @@ export default function FileUploadPage() {
       }
 
       const file = validateFile(formDataFileUpload);
+      uploadFileName = file.name;
+      uploadFileType = file.type;
 
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
@@ -124,6 +132,10 @@ export default function FileUploadPage() {
 
       formElement.reset();
       allUserFiles.refetch();
+      pendo.track("file_uploaded", {
+        fileType: file.type,
+        fileName: file.name,
+      });
       toast({
         title: "File uploaded",
         description: "Your file has been successfully uploaded.",
@@ -132,6 +144,11 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+      pendo.track("file_upload_failed", {
+        errorMessage: errorMessage.substring(0, 100),
+        fileType: uploadFileType,
+        fileName: uploadFileName,
+      });
       toast({
         title: "Error uploading file",
         description: errorMessage,
@@ -145,6 +162,10 @@ export default function FileUploadPage() {
   const handleDelete = async ({ id, name }: Pick<File, "id" | "name">) => {
     try {
       await deleteFile({ id });
+      pendo.track("file_deleted", {
+        fileId: id,
+        fileName: name,
+      });
       toast({
         title: "File deleted",
         description: (

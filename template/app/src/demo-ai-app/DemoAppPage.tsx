@@ -136,6 +136,9 @@ function NewTaskForm({
   const handleSubmit = async () => {
     try {
       await handleCreateTask({ description });
+      pendo.track("task_created", {
+        descriptionLength: description.length,
+      });
       setDescription("");
     } catch (err: any) {
       window.alert("Error: " + (err.message || "Something went wrong"));
@@ -150,8 +153,21 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        pendo.track("ai_schedule_generated", {
+          hours: todaysHours,
+          taskCount: tasks?.length || 0,
+          generatedTaskCount: response.tasks?.length || 0,
+          generatedSubtaskCount: response.taskItems?.length || 0,
+        });
       }
     } catch (err: any) {
+      const errorType = err.statusCode === 402 ? "out_of_credits" : "api_error";
+      pendo.track("ai_schedule_generation_failed", {
+        errorType,
+        statusCode: err.statusCode || 0,
+        hours: todaysHours,
+        taskCount: tasks?.length || 0,
+      });
       if (err.statusCode === 402) {
         toast({
           title: "⚠️ You are out of credits!",
@@ -292,6 +308,10 @@ function Todo({ id, isDone, description, time }: TodoProps) {
       id,
       isDone: checked,
     });
+    pendo.track("task_completed", {
+      taskId: id,
+      isDone: checked,
+    });
   };
 
   const handleTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -303,6 +323,9 @@ function Todo({ id, isDone, description, time }: TodoProps) {
 
   const handleDeleteClick = async () => {
     await deleteTask({ id });
+    pendo.track("task_deleted", {
+      taskId: id,
+    });
   };
 
   return (
