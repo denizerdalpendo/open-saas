@@ -44,7 +44,7 @@ export default function DemoAppPage() {
         <p className="text-muted-foreground mx-auto mt-6 max-w-2xl text-center text-lg leading-8">
           This example app uses OpenAI's chat completions with function calling
           to return a structured JSON object. Try it out, enter your day's
-          tasks, and let AI do the rest!
+          tasks, and let AI do the rest! Start by adding a task below.
         </p>
         {/* begin AI-powered Todo List */}
         <Card className="bg-muted/10 my-8">
@@ -135,21 +135,39 @@ function NewTaskForm({
 
   const handleSubmit = async () => {
     try {
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track('AddTaskClicked');
+      }
       await handleCreateTask({ description });
       setDescription("");
+      toast({
+        title: "Task added successfully!",
+        description: "Your task has been added to the list.",
+      });
     } catch (err: any) {
-      window.alert("Error: " + (err.message || "Something went wrong"));
+      toast({
+        title: "Error adding task",
+        description: err.message || "Something went wrong. Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
   const handleGeneratePlan = async () => {
     try {
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track('GenerateScheduleClicked');
+      }
       setIsPlanGenerating(true);
       const response = await generateGptResponse({
         hours: todaysHours,
       });
       if (response) {
         setResponse(response);
+        toast({
+          title: "Schedule generated!",
+          description: "Your AI-powered schedule is ready below.",
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
@@ -247,30 +265,43 @@ function NewTaskForm({
             </div>
           </div>
         ) : (
-          <div className="text-muted-foreground text-center">
-            Add tasks to begin
+          <div className="border-muted rounded-lg border-2 border-dashed p-8 text-center">
+            <p className="text-muted-foreground text-lg font-medium">
+              No tasks yet
+            </p>
+            <p className="text-muted-foreground mt-2 text-sm">
+              Add your first task above to get started with AI scheduling
+            </p>
           </div>
         )}
       </div>
 
-      <Button
-        type="button"
-        disabled={isPlanGenerating || tasks?.length === 0}
-        onClick={() => handleGeneratePlan()}
-        variant="default"
-        size="default"
-        className="w-full"
-        data-testid="generate-schedule-button"
-      >
-        {isPlanGenerating ? (
-          <>
-            <Loader2 className="mr-2 inline-block animate-spin" />
-            Generating...
-          </>
-        ) : (
-          "Generate Schedule"
+      <div className="w-full">
+        <Button
+          type="button"
+          disabled={isPlanGenerating || tasks?.length === 0}
+          onClick={() => handleGeneratePlan()}
+          variant="default"
+          size="default"
+          className="w-full"
+          data-testid="generate-schedule-button"
+          title={tasks?.length === 0 ? "Add at least one task to generate a schedule" : "Generate your AI-powered schedule"}
+        >
+          {isPlanGenerating ? (
+            <>
+              <Loader2 className="mr-2 inline-block animate-spin" />
+              Generating...
+            </>
+          ) : (
+            "Generate Schedule"
+          )}
+        </Button>
+        {tasks?.length === 0 && (
+          <p className="text-muted-foreground mt-2 text-center text-xs">
+            Add tasks above to enable schedule generation
+          </p>
         )}
-      </Button>
+      </div>
 
       {!!response && (
         <div className="flex flex-col">

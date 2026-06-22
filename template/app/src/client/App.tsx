@@ -49,35 +49,89 @@ export default function App() {
     }
   }, [location]);
 
+  // Track page views in Pendo whenever location changes
+  useEffect(() => {
+    let attempts = 0;
+    const maxAttempts = 50;
+
+    const trackPageView = () => {
+      if (typeof window !== 'undefined' && (window as any).pendo && (window as any).pendo.pageLoad) {
+        try {
+          (window as any).pendo.pageLoad();
+          console.log('Pendo page view tracked:', location.pathname);
+        } catch (error) {
+          console.error('Error tracking page view in Pendo:', error);
+        }
+      } else if (typeof window !== 'undefined' && attempts < maxAttempts) {
+        // If Pendo isn't ready yet, wait for it
+        attempts++;
+        setTimeout(trackPageView, 100);
+      }
+    };
+    trackPageView();
+  }, [location.pathname]);
+
   // Initialize Pendo with anonymous ID on app load
   useEffect(() => {
-    if (typeof window !== 'undefined' && (window as any).pendo) {
-      (window as any).pendo.initialize({
-        visitor: {
-          id: 'ANONYMOUS_VISITOR_ID'
+    let attempts = 0;
+    const maxAttempts = 50; // Max 5 seconds (50 * 100ms)
+
+    const initializePendo = () => {
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        try {
+          (window as any).pendo.initialize({
+            visitor: {
+              id: 'ANONYMOUS_VISITOR_ID'
+            }
+          });
+          console.log('Pendo initialized successfully');
+        } catch (error) {
+          console.error('Error initializing Pendo:', error);
         }
-      });
-    }
+      } else if (typeof window !== 'undefined' && attempts < maxAttempts) {
+        // If Pendo isn't loaded yet, wait for it
+        attempts++;
+        setTimeout(initializePendo, 100);
+      } else if (attempts >= maxAttempts) {
+        console.warn('Pendo failed to load after 5 seconds');
+      }
+    };
+    initializePendo();
   }, []);
 
   // Identify with actual user data once authenticated
   useEffect(() => {
-    if (user && typeof window !== 'undefined' && (window as any).pendo) {
-      (window as any).pendo.identify({
-        visitor: {
-          id: user.id,
-          email: user.email || undefined,
-          username: user.username || undefined,
+    let attempts = 0;
+    const maxAttempts = 50;
 
-          // Selectively include important visitor metadata fields
-          is_admin: user.isAdmin,
-          subscription_plan: user.subscriptionPlan || 'free',
-          subscription_status: user.subscriptionStatus || 'none',
-          credits: user.credits,
-          created_at: user.createdAt?.toISOString(),
+    const identifyUser = () => {
+      if (user && typeof window !== 'undefined' && (window as any).pendo) {
+        try {
+          (window as any).pendo.identify({
+            visitor: {
+              id: user.id,
+              email: user.email || undefined,
+              username: user.username || undefined,
+
+              // Selectively include important visitor metadata fields
+              is_admin: user.isAdmin,
+              subscription_plan: user.subscriptionPlan || 'free',
+              subscription_status: user.subscriptionStatus || 'none',
+              credits: user.credits,
+              created_at: user.createdAt?.toISOString(),
+            }
+          });
+          console.log('Pendo user identified:', user.id);
+        } catch (error) {
+          console.error('Error identifying user in Pendo:', error);
         }
-      });
-    }
+      } else if (user && typeof window !== 'undefined' && attempts < maxAttempts) {
+        // If Pendo isn't loaded yet, wait for it
+        attempts++;
+        setTimeout(identifyUser, 100);
+      }
+    };
+    identifyUser();
   }, [user]);
 
   return (
