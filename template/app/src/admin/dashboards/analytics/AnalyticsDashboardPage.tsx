@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { type AuthUser } from "wasp/auth";
 import { getDailyStats, useQuery } from "wasp/client/operations";
 import { cn } from "../../../client/utils";
@@ -11,6 +12,21 @@ import TotalSignupsCard from "./TotalSignupsCard";
 
 const Dashboard = ({ user }: { user: AuthUser }) => {
   const { data: stats, isLoading, error } = useQuery(getDailyStats);
+
+  // Track admin dashboard access
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      const now = new Date();
+      const timeOfDay = now.getHours() < 12 ? "morning" : now.getHours() < 18 ? "afternoon" : "evening";
+
+      (window as any).pendo.track("admin_dashboard_accessed", {
+        admin_email: user.email || "",
+        dashboard_type: "analytics",
+        time_of_day: timeOfDay,
+        previous_visit_date: "" // Would need to track from local storage or server
+      });
+    }
+  }, [user]);
 
   if (error) {
     return (

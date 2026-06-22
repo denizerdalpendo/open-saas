@@ -1,9 +1,25 @@
 import { Link as WaspRouterLink, routes } from "wasp/client/router";
+import { useAuth } from "wasp/client/auth";
 import { Button } from "../../client/components/ui/button";
 import openSaasBannerDark from "../../client/static/open-saas-banner-dark.svg";
 import openSaasBannerLight from "../../client/static/open-saas-banner-light.svg";
 
 export default function Hero() {
+  const { data: user } = useAuth();
+
+  const handleCtaClick = (ctaText: string, destinationPage: string) => {
+    // Track landing page CTA click
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("landing_page_cta_clicked", {
+        cta_text: ctaText,
+        cta_location: "hero",
+        destination_page: destinationPage,
+        is_authenticated: !!user,
+        visitor_session_duration: 0 // Would need to track session start
+      });
+    }
+  };
+
   return (
     <div className="relative w-full pt-14">
       <TopGradient />
@@ -20,12 +36,18 @@ export default function Hero() {
             </p>
             <div className="mt-10 flex items-center justify-center gap-x-6">
               <Button size="lg" variant="outline" asChild>
-                <WaspRouterLink to={routes.PricingPageRoute.to}>
+                <WaspRouterLink
+                  to={routes.PricingPageRoute.to}
+                  onClick={() => handleCtaClick("Learn More", "pricing")}
+                >
                   Learn More
                 </WaspRouterLink>
               </Button>
               <Button size="lg" variant="default" asChild>
-                <WaspRouterLink to={routes.SignupRoute.to}>
+                <WaspRouterLink
+                  to={routes.SignupRoute.to}
+                  onClick={() => handleCtaClick("Get Started", "signup")}
+                >
                   Get Started <span aria-hidden="true">→</span>
                 </WaspRouterLink>
               </Button>

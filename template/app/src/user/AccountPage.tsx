@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { getCustomerPortalUrl, useQuery } from "wasp/client/operations";
 import { Link as WaspRouterLink, routes } from "wasp/client/router";
 import type { User } from "wasp/entities";
@@ -17,6 +18,19 @@ import {
 } from "../payment/plans";
 
 export default function AccountPage({ user }: { user: User }) {
+  // Track account page view
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("account_page_viewed", {
+        subscription_status: user.subscriptionStatus || "none",
+        payment_plan: user.subscriptionPlan || "none",
+        credits_remaining: user.credits || 0,
+        days_until_renewal: 0, // Would need to calculate from datePaid
+        has_payment_method: !!user.subscriptionStatus
+      });
+    }
+  }, [user]);
+
   return (
     <div className="mt-10 px-6">
       <Card className="mb-4 lg:m-8">
@@ -177,6 +191,18 @@ function CustomerPortalButton() {
 function BuyMoreButton({
   subscriptionStatus,
 }: Pick<User, "subscriptionStatus">) {
+  const handleBuyMoreClick = () => {
+    // Track buy credits clicked event
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("buy_credits_clicked", {
+        current_credits: 0, // Would need to access user.credits from parent
+        subscription_status: subscriptionStatus || "none",
+        source_page: "account",
+        days_since_last_purchase: 0 // Would need to calculate from user data
+      });
+    }
+  };
+
   if (
     subscriptionStatus === SubscriptionStatus.Active ||
     subscriptionStatus === SubscriptionStatus.CancelAtPeriodEnd
@@ -188,6 +214,7 @@ function BuyMoreButton({
     <WaspRouterLink
       to={routes.PricingPageRoute.to}
       className="text-primary hover:text-primary/80 text-sm font-medium transition-colors duration-200"
+      onClick={handleBuyMoreClick}
     >
       <Button variant="link">Buy More Credits</Button>
     </WaspRouterLink>

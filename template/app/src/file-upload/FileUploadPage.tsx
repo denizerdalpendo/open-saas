@@ -67,6 +67,19 @@ export default function FileUploadPage() {
               });
               return;
             case "success":
+              // Track file download
+              const fileToDownload = allUserFiles.data?.find((f: File) => f.s3Key === fileKeyForS3);
+              if (fileToDownload && typeof window !== 'undefined' && (window as any).pendo) {
+                (window as any).pendo.track("file_downloaded", {
+                  file_type: fileToDownload.type,
+                  file_size: fileToDownload.uploadedAt ? 0 : 0, // Size not stored in this model
+                  file_name: fileToDownload.name,
+                  time_since_upload: fileToDownload.uploadedAt
+                    ? Math.floor((Date.now() - new Date(fileToDownload.uploadedAt).getTime()) / (1000 * 60 * 60 * 24))
+                    : 0,
+                  download_source: "file_upload_page"
+                });
+              }
               window.open(urlQuery.data, "_blank");
               return;
           }
@@ -75,9 +88,12 @@ export default function FileUploadPage() {
           setFileKeyForS3("");
         });
     }
-  }, [fileKeyForS3]);
+  }, [fileKeyForS3, allUserFiles.data]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    const startTime = Date.now();
+    let file: File | null = null;
+
     try {
       e.preventDefault();
 
@@ -102,7 +118,7 @@ export default function FileUploadPage() {
         return;
       }
 
-      const file = validateFile(formDataFileUpload);
+      file = validateFile(formDataFileUpload);
 
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
@@ -122,6 +138,19 @@ export default function FileUploadPage() {
         fileName: file.name,
       });
 
+      // Track successful file upload
+      const uploadDuration = Math.round((Date.now() - startTime) / 1000);
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("file_uploaded", {
+          file_type: file.type,
+          file_size: file.size,
+          file_name: file.name,
+          upload_duration: uploadDuration,
+          storage_used: file.size,
+          total_files_count: (allUserFiles.data?.length || 0) + 1
+        });
+      }
+
       formElement.reset();
       allUserFiles.refetch();
       toast({
@@ -132,6 +161,19 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+
+      // Track failed file upload
+      if (file && typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("file_upload_failed", {
+          file_type: file.type,
+          file_size: file.size,
+          error_message: errorMessage,
+          failure_stage: "upload",
+          browser: navigator.userAgent,
+          connection_type: (navigator as any).connection?.effectiveType || "unknown"
+        });
+      }
+
       toast({
         title: "Error uploading file",
         description: errorMessage,
@@ -144,7 +186,27 @@ export default function FileUploadPage() {
 
   const handleDelete = async ({ id, name }: Pick<File, "id" | "name">) => {
     try {
+      // Get file details before deletion for tracking
+      const fileToRemove = allUserFiles.data?.find((f: File) => f.id === id);
+
       await deleteFile({ id });
+
+      // Track file deletion
+      if (fileToRemove && typeof window !== 'undefined' && (window as any).pendo) {
+        const timeSinceUpload = fileToRemove.uploadedAt
+          ? Math.floor((Date.now() - new Date(fileToRemove.uploadedAt).getTime()) / (1000 * 60 * 60 * 24))
+          : 0;
+
+        (window as any).pendo.track("file_deleted", {
+          file_type: fileToRemove.type,
+          file_size: 0, // Size not stored in this model
+          file_name: fileToRemove.name,
+          time_since_upload: timeSinceUpload,
+          remaining_files_count: (allUserFiles.data?.length || 1) - 1,
+          storage_freed: 0 // Would need actual file size
+        });
+      }
+
       toast({
         title: "File deleted",
         description: (

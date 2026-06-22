@@ -136,6 +136,17 @@ function NewTaskForm({
   const handleSubmit = async () => {
     try {
       await handleCreateTask({ description });
+
+      // Track task creation
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("task_created", {
+          task_description_length: description.length,
+          estimated_time: 0, // Default, would be set by user later
+          total_tasks_count: (tasks?.length || 0) + 1,
+          source_page: "demo_app"
+        });
+      }
+
       setDescription("");
     } catch (err: any) {
       window.alert("Error: " + (err.message || "Something went wrong"));
@@ -143,6 +154,7 @@ function NewTaskForm({
   };
 
   const handleGeneratePlan = async () => {
+    const startTime = Date.now();
     try {
       setIsPlanGenerating(true);
       const response = await generateGptResponse({
@@ -150,9 +162,33 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+
+        // Track successful AI schedule generation
+        const responseTime = Date.now() - startTime;
+        if (typeof window !== 'undefined' && (window as any).pendo) {
+          (window as any).pendo.track("ai_schedule_generated", {
+            num_tasks: tasks?.length || 0,
+            work_hours: todaysHours,
+            credits_used: 1, // Assuming 1 credit per generation
+            has_subscription: false, // Would need to get from user context
+            generation_success: true,
+            response_time: Math.round(responseTime / 1000) // in seconds
+          });
+        }
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
+        // Track out of credits event
+        if (typeof window !== 'undefined' && (window as any).pendo) {
+          (window as any).pendo.track("ai_generation_failed_no_credits", {
+            current_credits: 0,
+            subscription_status: "none",
+            num_tasks: tasks?.length || 0,
+            work_hours: todaysHours,
+            user_redirected_to_pricing: false // Will be true if they click the action
+          });
+        }
+
         toast({
           title: "⚠️ You are out of credits!",
           style: {
@@ -162,6 +198,18 @@ function NewTaskForm({
             <ToastAction
               altText="Go to pricing page to buy credits/subscription"
               asChild
+              onClick={() => {
+                // Track if user clicks to go to pricing
+                if (typeof window !== 'undefined' && (window as any).pendo) {
+                  (window as any).pendo.track("ai_generation_failed_no_credits", {
+                    current_credits: 0,
+                    subscription_status: "none",
+                    num_tasks: tasks?.length || 0,
+                    work_hours: todaysHours,
+                    user_redirected_to_pricing: true
+                  });
+                }
+              }}
             >
               <Link to={routes.PricingPageRoute.to}>
                 Go to pricing page <ArrowRight className="ml-1 h-4 w-4" />
@@ -292,6 +340,16 @@ function Todo({ id, isDone, description, time }: TodoProps) {
       id,
       isDone: checked,
     });
+
+    // Track task completion
+    if (checked && typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("task_completed", {
+        task_id: id,
+        time_to_complete: 0, // Would need to track from creation time
+        task_source: "user_created",
+        completion_method: "checkbox"
+      });
+    }
   };
 
   const handleTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -302,6 +360,16 @@ function Todo({ id, isDone, description, time }: TodoProps) {
   };
 
   const handleDeleteClick = async () => {
+    // Track task deletion
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("task_deleted", {
+        task_id: id,
+        was_completed: isDone,
+        time_since_creation: 0, // Would need to calculate from task creation time
+        remaining_tasks_count: 0 // Would need to get from tasks list
+      });
+    }
+
     await deleteTask({ id });
   };
 
