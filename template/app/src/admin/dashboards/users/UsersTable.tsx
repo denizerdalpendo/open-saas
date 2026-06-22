@@ -31,15 +31,26 @@ function AdminSwitch({ id, isAdmin }: Pick<User, "id" | "isAdmin">) {
   return (
     <Switch
       checked={isAdmin}
-      onCheckedChange={(value) =>
-        updateIsUserAdminById({ id: id, isAdmin: value })
-      }
+      onCheckedChange={(value) => {
+        // Track user_role_changed event
+        if (typeof window !== 'undefined' && (window as any).pendo) {
+          (window as any).pendo.track("user_role_changed", {
+            admin_user_id: currentUser?.id || "unknown",
+            target_user_id: id,
+            previous_admin_status: isAdmin,
+            new_admin_status: value
+          });
+        }
+
+        updateIsUserAdminById({ id: id, isAdmin: value });
+      }}
       disabled={isCurrentUser}
     />
   );
 }
 
 const UsersTable = () => {
+  const { data: currentUser } = useAuth();
   const [currentPage, setCurrentPage] = useState(1);
   const [emailFilter, setEmailFilter] = useState<string | undefined>(undefined);
   const [isAdminFilter, setIsAdminFilter] = useState<boolean | undefined>(
@@ -69,6 +80,24 @@ const UsersTable = () => {
       setCurrentPage(1);
     },
     [debouncedEmailFilter, subscriptionStatusFilter, isAdminFilter],
+  );
+
+  useEffect(
+    function trackFiltersChanged() {
+      // Track admin_users_filtered event when filters are applied
+      const hasFilters = debouncedEmailFilter || subscriptionStatusFilter.length > 0 || isAdminFilter !== undefined;
+
+      if (hasFilters && typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("admin_users_filtered", {
+          admin_user_id: currentUser?.id || "unknown",
+          email_filter: debouncedEmailFilter || "none",
+          subscription_status_filters: subscriptionStatusFilter.length > 0 ? subscriptionStatusFilter.join(",") : "none",
+          is_admin_filter: isAdminFilter !== undefined ? isAdminFilter.toString() : "none",
+          results_count: data?.users?.length || 0
+        });
+      }
+    },
+    [debouncedEmailFilter, subscriptionStatusFilter, isAdminFilter, data?.users?.length, currentUser?.id],
   );
 
   const handleStatusToggle = (status: SubscriptionStatus | null) => {

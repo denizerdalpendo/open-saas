@@ -9,6 +9,24 @@ export default function CheckoutResultPage() {
   const status = urlSearchParams.get("status");
 
   useEffect(() => {
+    // Track checkout completed or canceled events
+    if (status === "success" && typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("checkout_completed", {
+        plan_id: urlSearchParams.get("plan_id") || "unknown",
+        plan_name: urlSearchParams.get("plan_name") || "unknown",
+        transaction_amount: urlSearchParams.get("amount") || "unknown",
+        user_id: urlSearchParams.get("user_id") || "unknown",
+        payment_processor: "stripe"
+      });
+    } else if (status === "canceled" && typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("checkout_canceled", {
+        plan_id: urlSearchParams.get("plan_id") || "unknown",
+        plan_name: urlSearchParams.get("plan_name") || "unknown",
+        user_id: urlSearchParams.get("user_id") || "unknown",
+        checkout_session_duration: urlSearchParams.get("duration") || "unknown"
+      });
+    }
+
     const accountPageRedirectTimeoutId = setTimeout(() => {
       navigate("/account");
     }, ACCOUNT_PAGE_REDIRECT_DELAY_MS);
@@ -16,7 +34,7 @@ export default function CheckoutResultPage() {
     return () => {
       clearTimeout(accountPageRedirectTimeoutId);
     };
-  }, []);
+  }, [status]);
 
   if (status !== "success" && status !== "canceled") {
     return <Navigate to="/account" />;

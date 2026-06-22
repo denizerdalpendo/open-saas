@@ -49,6 +49,19 @@ export const generateCheckoutSession: GenerateCheckoutSession<
     prismaUserDelegate: context.entities.User,
   });
 
+  // Track checkout_session_created event
+  // Note: This is a server-side operation. To track in Pendo, you would need to:
+  // 1. Send this data to the client-side to track via pendo.track()
+  // 2. Use Pendo's Track Events API
+  // 3. The event is already tracked in PricingPage.tsx on the client side
+  console.log('Pendo Track Event: checkout_session_created', {
+    user_id: userId,
+    plan_id: paymentPlanId,
+    session_id: session.id,
+    session_url: session.url,
+    payment_processor: "stripe"
+  });
+
   return {
     sessionUrl: session.url,
     sessionId: session.id,

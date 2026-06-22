@@ -1,9 +1,23 @@
 import { Link as WaspRouterLink, routes } from "wasp/client/router";
+import { useAuth } from "wasp/client/auth";
 import { Button } from "../../client/components/ui/button";
 import openSaasBannerDark from "../../client/static/open-saas-banner-dark.svg";
 import openSaasBannerLight from "../../client/static/open-saas-banner-light.svg";
 
 export default function Hero() {
+  const { data: user } = useAuth();
+
+  const handleGetStartedClick = () => {
+    // Track get_started_clicked event
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("get_started_clicked", {
+        page_location: "hero_section",
+        user_authenticated: !!user,
+        button_position: "primary_cta"
+      });
+    }
+  };
+
   return (
     <div className="relative w-full pt-14">
       <TopGradient />
@@ -25,7 +39,7 @@ export default function Hero() {
                 </WaspRouterLink>
               </Button>
               <Button size="lg" variant="default" asChild>
-                <WaspRouterLink to={routes.SignupRoute.to}>
+                <WaspRouterLink to={routes.SignupRoute.to} onClick={handleGetStartedClick}>
                   Get Started <span aria-hidden="true">→</span>
                 </WaspRouterLink>
               </Button>
