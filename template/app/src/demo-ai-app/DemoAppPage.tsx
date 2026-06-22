@@ -9,6 +9,7 @@ import {
   useQuery,
 } from "wasp/client/operations";
 import { Link, routes } from "wasp/client/router";
+import { useAuth } from "wasp/client/auth";
 
 import { ArrowRight, Loader2, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -63,6 +64,7 @@ function NewTaskForm({
 }: {
   handleCreateTask: typeof createTask;
 }) {
+  const { data: user } = useAuth();
   const [description, setDescription] = useState<string>("");
   const [todaysHours, setTodaysHours] = useState<number>(8);
   const [response, setResponse] = useState<GeneratedSchedule | null>({
@@ -136,6 +138,16 @@ function NewTaskForm({
   const handleSubmit = async () => {
     try {
       await handleCreateTask({ description });
+
+      // Track task_created event
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("task_created", {
+          user_id: user?.id || "unknown",
+          task_description_length: description.length,
+          total_tasks_count: (tasks?.length || 0) + 1
+        });
+      }
+
       setDescription("");
     } catch (err: any) {
       window.alert("Error: " + (err.message || "Something went wrong"));
@@ -150,9 +162,34 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+
+        // Track ai_schedule_generated event
+        if (typeof window !== 'undefined' && (window as any).pendo) {
+          (window as any).pendo.track("ai_schedule_generated", {
+            user_id: user?.id || "unknown",
+            hours_scheduled: todaysHours,
+            num_tasks: response.tasks?.length || 0,
+            num_subtasks_generated: response.taskItems?.length || 0,
+            has_active_subscription: !!user?.subscriptionStatus && user.subscriptionStatus !== "deleted",
+            credits_used: 1,
+            credits_remaining: user?.credits || 0
+          });
+        }
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
+        // Track ai_schedule_generation_failed event for out of credits
+        if (typeof window !== 'undefined' && (window as any).pendo) {
+          (window as any).pendo.track("ai_schedule_generation_failed", {
+            user_id: user?.id || "unknown",
+            error_type: "insufficient_credits",
+            error_code: 402,
+            has_active_subscription: !!user?.subscriptionStatus && user.subscriptionStatus !== "deleted",
+            credits_remaining: user?.credits || 0,
+            failure_reason: "out_of_credits"
+          });
+        }
+
         toast({
           title: "⚠️ You are out of credits!",
           style: {
@@ -170,6 +207,18 @@ function NewTaskForm({
           ),
         });
       } else {
+        // Track ai_schedule_generation_failed event for other errors
+        if (typeof window !== 'undefined' && (window as any).pendo) {
+          (window as any).pendo.track("ai_schedule_generation_failed", {
+            user_id: user?.id || "unknown",
+            error_type: "api_error",
+            error_code: err.statusCode || "unknown",
+            has_active_subscription: !!user?.subscriptionStatus && user.subscriptionStatus !== "deleted",
+            credits_remaining: user?.credits || 0,
+            failure_reason: err.message || "unknown_error"
+          });
+        }
+
         toast({
           title: "Error",
           description: err.message || "Something went wrong",
@@ -287,7 +336,23 @@ function NewTaskForm({
 type TodoProps = Pick<Task, "id" | "isDone" | "description" | "time">;
 
 function Todo({ id, isDone, description, time }: TodoProps) {
+  const { data: user } = useAuth();
+
   const handleCheckboxChange = async (checked: boolean) => {
+    // Track task_completed event
+    if (typeof window !== 'undefined' && (window as any).pendo && checked) {
+      const taskCreatedAt = new Date(); // In a real app, you'd get this from the task object
+      const now = new Date();
+      const taskAgeMinutes = Math.floor((now.getTime() - taskCreatedAt.getTime()) / (1000 * 60));
+
+      (window as any).pendo.track("task_completed", {
+        user_id: user?.id || "unknown",
+        task_id: id,
+        is_completed: checked,
+        task_age_minutes: taskAgeMinutes
+      });
+    }
+
     await updateTask({
       id,
       isDone: checked,
@@ -295,13 +360,40 @@ function Todo({ id, isDone, description, time }: TodoProps) {
   };
 
   const handleTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newTime = e.currentTarget.value;
+
+    // Track task_updated event
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      (window as any).pendo.track("task_updated", {
+        user_id: user?.id || "unknown",
+        task_id: id,
+        is_done: isDone,
+        time_allocated: newTime,
+        update_type: "time_changed"
+      });
+    }
+
     await updateTask({
       id,
-      time: e.currentTarget.value,
+      time: newTime,
     });
   };
 
   const handleDeleteClick = async () => {
+    // Track task_deleted event
+    if (typeof window !== 'undefined' && (window as any).pendo) {
+      const taskCreatedAt = new Date(); // In a real app, you'd get this from the task object
+      const now = new Date();
+      const taskAgeMinutes = Math.floor((now.getTime() - taskCreatedAt.getTime()) / (1000 * 60));
+
+      (window as any).pendo.track("task_deleted", {
+        user_id: user?.id || "unknown",
+        task_id: id,
+        was_completed: isDone,
+        task_age_minutes: taskAgeMinutes
+      });
+    }
+
     await deleteTask({ id });
   };
 

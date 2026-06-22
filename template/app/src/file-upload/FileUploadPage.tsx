@@ -7,6 +7,7 @@ import {
   getDownloadFileSignedURL,
   useQuery,
 } from "wasp/client/operations";
+import { useAuth } from "wasp/client/auth";
 import type { File } from "wasp/entities";
 
 import { Download, Trash } from "lucide-react";
@@ -30,6 +31,7 @@ import { uploadFileWithProgress, validateFile } from "./fileUploading";
 import { ALLOWED_FILE_TYPES } from "./validation";
 
 export default function FileUploadPage() {
+  const { data: user } = useAuth();
   const [fileKeyForS3, setFileKeyForS3] = useState<File["s3Key"]>("");
   const [uploadProgressPercent, setUploadProgressPercent] = useState<number>(0);
   const [fileToDelete, setFileToDelete] = useState<Pick<
@@ -67,6 +69,18 @@ export default function FileUploadPage() {
               });
               return;
             case "success":
+              // Track file downloaded event
+              const downloadedFile = allUserFiles.data?.find(f => f.s3Key === fileKeyForS3);
+              if (typeof window !== 'undefined' && (window as any).pendo && downloadedFile) {
+                (window as any).pendo.track("file_downloaded", {
+                  user_id: user?.id || "unknown",
+                  file_id: downloadedFile.id,
+                  file_type: downloadedFile.type,
+                  file_name: downloadedFile.name,
+                  file_size_bytes: downloadedFile.size || "unknown"
+                });
+              }
+
               window.open(urlQuery.data, "_blank");
               return;
           }
@@ -78,6 +92,7 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    const uploadStartTime = Date.now();
     try {
       e.preventDefault();
 
@@ -122,6 +137,18 @@ export default function FileUploadPage() {
         fileName: file.name,
       });
 
+      // Track file uploaded event
+      const uploadDuration = Date.now() - uploadStartTime;
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("file_uploaded", {
+          user_id: user?.id || "unknown",
+          file_type: file.type,
+          file_size_bytes: file.size,
+          file_name: file.name,
+          upload_duration_ms: uploadDuration
+        });
+      }
+
       formElement.reset();
       allUserFiles.refetch();
       toast({
@@ -144,7 +171,25 @@ export default function FileUploadPage() {
 
   const handleDelete = async ({ id, name }: Pick<File, "id" | "name">) => {
     try {
+      // Find the file to get additional metadata before deleting
+      const fileToDeleteData = allUserFiles.data?.find(f => f.id === id);
+      const fileCreatedAt = fileToDeleteData?.uploadedAt ? new Date(fileToDeleteData.uploadedAt) : new Date();
+      const now = new Date();
+      const fileAgeDays = Math.floor((now.getTime() - fileCreatedAt.getTime()) / (1000 * 60 * 60 * 24));
+
       await deleteFile({ id });
+
+      // Track file deleted event
+      if (typeof window !== 'undefined' && (window as any).pendo) {
+        (window as any).pendo.track("file_deleted", {
+          user_id: user?.id || "unknown",
+          file_id: id,
+          file_type: fileToDeleteData?.type || "unknown",
+          file_name: name,
+          file_age_days: fileAgeDays
+        });
+      }
+
       toast({
         title: "File deleted",
         description: (
