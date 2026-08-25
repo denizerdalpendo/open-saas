@@ -31,9 +31,16 @@ function AdminSwitch({ id, isAdmin }: Pick<User, "id" | "isAdmin">) {
   return (
     <Switch
       checked={isAdmin}
-      onCheckedChange={(value) =>
-        updateIsUserAdminById({ id: id, isAdmin: value })
-      }
+      onCheckedChange={(value) => {
+        updateIsUserAdminById({ id: id, isAdmin: value }).then(() => {
+          if ((window as any).pendo) {
+            (window as any).pendo.track("admin_user_role_changed", {
+              targetUserId: String(id),
+              newIsAdmin: value,
+            });
+          }
+        });
+      }}
       disabled={isCurrentUser}
     />
   );

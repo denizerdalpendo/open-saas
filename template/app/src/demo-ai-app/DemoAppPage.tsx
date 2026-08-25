@@ -150,6 +150,13 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        if ((window as any).pendo) {
+          (window as any).pendo.track("ai_schedule_generated", {
+            hoursAllocated: todaysHours,
+            taskCount: response.tasks?.length || 0,
+            subtaskCount: response.taskItems?.length || 0,
+          });
+        }
       }
     } catch (err: any) {
       if (err.statusCode === 402) {

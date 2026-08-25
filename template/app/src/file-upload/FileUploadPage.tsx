@@ -128,6 +128,14 @@ export default function FileUploadPage() {
         title: "File uploaded",
         description: "Your file has been successfully uploaded.",
       });
+
+      if ((window as any).pendo) {
+        (window as any).pendo.track("file_uploaded", {
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+        });
+      }
     } catch (error) {
       console.error("Error uploading file:", error);
       const errorMessage =
@@ -145,6 +153,12 @@ export default function FileUploadPage() {
   const handleDelete = async ({ id, name }: Pick<File, "id" | "name">) => {
     try {
       await deleteFile({ id });
+      if ((window as any).pendo) {
+        (window as any).pendo.track("file_deleted", {
+          fileId: String(id),
+          fileName: name,
+        });
+      }
       toast({
         title: "File deleted",
         description: (
