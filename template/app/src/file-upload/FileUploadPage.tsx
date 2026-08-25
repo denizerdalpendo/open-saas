@@ -124,6 +124,12 @@ export default function FileUploadPage() {
 
       formElement.reset();
       allUserFiles.refetch();
+      if (window.pendo) {
+        window.pendo.track("file_uploaded", {
+          fileType: file.type,
+          fileName: file.name,
+        });
+      }
       toast({
         title: "File uploaded",
         description: "Your file has been successfully uploaded.",
@@ -145,6 +151,9 @@ export default function FileUploadPage() {
   const handleDelete = async ({ id, name }: Pick<File, "id" | "name">) => {
     try {
       await deleteFile({ id });
+      if (window.pendo) {
+        window.pendo.track("file_deleted", { fileName: name });
+      }
       toast({
         title: "File deleted",
         description: (
