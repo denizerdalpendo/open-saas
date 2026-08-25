@@ -11,6 +11,8 @@ declare global {
   interface Window {
     pendo: any;
   }
+  // Allow bare `pendo` usage (e.g. `typeof pendo !== 'undefined'`)
+  var pendo: any; // eslint-disable-line no-var
 }
 
 export {};

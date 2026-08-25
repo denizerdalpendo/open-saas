@@ -9,6 +9,14 @@ export default function CheckoutResultPage() {
   const status = urlSearchParams.get("status");
 
   useEffect(() => {
+    if (status === "success" || status === "canceled") {
+      if (typeof pendo !== "undefined") {
+        pendo.track("checkout_completed", {
+          status: status,
+        });
+      }
+    }
+
     const accountPageRedirectTimeoutId = setTimeout(() => {
       navigate("/account");
     }, ACCOUNT_PAGE_REDIRECT_DELAY_MS);

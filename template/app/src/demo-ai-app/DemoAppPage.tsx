@@ -150,6 +150,14 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        if (typeof pendo !== "undefined") {
+          pendo.track("ai_schedule_generated", {
+            hoursPlanned: todaysHours,
+            taskCount: tasks?.length ?? 0,
+            generatedTaskCount: response.tasks?.length ?? 0,
+            generatedSubtaskCount: response.taskItems?.length ?? 0,
+          });
+        }
       }
     } catch (err: any) {
       if (err.statusCode === 402) {

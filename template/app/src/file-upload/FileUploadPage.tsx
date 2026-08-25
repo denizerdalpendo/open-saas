@@ -128,6 +128,12 @@ export default function FileUploadPage() {
         title: "File uploaded",
         description: "Your file has been successfully uploaded.",
       });
+      if (typeof pendo !== "undefined") {
+        pendo.track("file_uploaded", {
+          fileType: file.type,
+          fileName: file.name,
+        });
+      }
     } catch (error) {
       console.error("Error uploading file:", error);
       const errorMessage =
@@ -154,6 +160,11 @@ export default function FileUploadPage() {
         ),
       });
       allUserFiles.refetch();
+      if (typeof pendo !== "undefined") {
+        pendo.track("file_deleted", {
+          fileName: name,
+        });
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "Error deleting file.";
