@@ -67,6 +67,11 @@ export default function FileUploadPage() {
               });
               return;
             case "success":
+              if (typeof window !== "undefined" && window.pendo) {
+                window.pendo.track("file_downloaded", {
+                  fileKey: fileKeyForS3,
+                });
+              }
               window.open(urlQuery.data, "_blank");
               return;
           }
@@ -122,6 +127,13 @@ export default function FileUploadPage() {
         fileName: file.name,
       });
 
+      if (typeof window !== "undefined" && window.pendo) {
+        window.pendo.track("file_uploaded", {
+          fileType: file.type,
+          fileName: file.name,
+        });
+      }
+
       formElement.reset();
       allUserFiles.refetch();
       toast({
@@ -145,6 +157,11 @@ export default function FileUploadPage() {
   const handleDelete = async ({ id, name }: Pick<File, "id" | "name">) => {
     try {
       await deleteFile({ id });
+      if (typeof window !== "undefined" && window.pendo) {
+        window.pendo.track("file_deleted", {
+          fileName: name,
+        });
+      }
       toast({
         title: "File deleted",
         description: (

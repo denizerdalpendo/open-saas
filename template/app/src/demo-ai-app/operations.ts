@@ -12,6 +12,7 @@ import type {
 } from "wasp/server/operations";
 import * as z from "zod";
 import { SubscriptionStatus } from "../payment/plans";
+import { pendoTrackEvent } from "../server/pendo";
 import { ensureArgsSchemaOrThrowHttpError } from "../server/validation";
 import { GeneratedSchedule, TaskPriority } from "./schedule";
 
@@ -91,6 +92,10 @@ export const generateGptResponse: GenerateGptResponse<
         },
       });
       transactions.push(decrementCredit);
+      await pendoTrackEvent("credit_consumed", context.user.id, "system", {
+        remainingCredits: context.user.credits - 1,
+        userId: context.user.id,
+      });
     } else {
       throw new HttpError(
         402,
