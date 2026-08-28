@@ -3,10 +3,28 @@ import { Navigate, useNavigate, useSearchParams } from "react-router";
 
 const ACCOUNT_PAGE_REDIRECT_DELAY_MS = 4000;
 
+const trackedCheckoutStatuses = new Set<string>();
+
 export default function CheckoutResultPage() {
   const navigate = useNavigate();
   const [urlSearchParams] = useSearchParams();
   const status = urlSearchParams.get("status");
+
+  useEffect(() => {
+    if (
+      status &&
+      !trackedCheckoutStatuses.has(status) &&
+      typeof window !== "undefined" &&
+      window.pendo
+    ) {
+      trackedCheckoutStatuses.add(status);
+      if (status === "success") {
+        window.pendo.track("checkout_completed", { status });
+      } else if (status === "canceled") {
+        window.pendo.track("checkout_canceled", { status });
+      }
+    }
+  }, [status]);
 
   useEffect(() => {
     const accountPageRedirectTimeoutId = setTimeout(() => {

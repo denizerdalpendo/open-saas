@@ -4,6 +4,7 @@ import type { Stripe } from "stripe";
 import { type MiddlewareConfigFn } from "wasp/server";
 import { type PaymentsWebhook } from "wasp/server/api";
 import { emailSender } from "wasp/server/email";
+import { pendoTrackEvent } from "../../server/pendo";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
@@ -117,6 +118,12 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      await pendoTrackEvent("credits_purchased", customerId, "system", {
+        numOfCreditsPurchased: paymentPlans[paymentPlanId].effect.amount,
+        paymentPlanId,
+        paymentProcessorUserId: customerId,
+        paymentProcessor: "stripe",
+      });
       break;
     case PaymentPlanId.Pro:
     case PaymentPlanId.Hobby:
@@ -172,6 +179,13 @@ async function handleCustomerSubscriptionUpdated(
     { paymentProcessorUserId: customerId, paymentPlanId, subscriptionStatus },
     prismaUserDelegate,
   );
+
+  await pendoTrackEvent("subscription_updated", customerId, "system", {
+    paymentPlanId,
+    subscriptionStatus,
+    paymentProcessorUserId: customerId,
+    paymentProcessor: "stripe",
+  });
 
   if (subscription.cancel_at_period_end && user.email) {
     await emailSender.send({
@@ -242,6 +256,11 @@ async function handleCustomerSubscriptionDeleted(
     },
     prismaUserDelegate,
   );
+
+  await pendoTrackEvent("subscription_deleted", customerId, "system", {
+    paymentProcessorUserId: customerId,
+    paymentProcessor: "stripe",
+  });
 }
 
 function getCustomerId(

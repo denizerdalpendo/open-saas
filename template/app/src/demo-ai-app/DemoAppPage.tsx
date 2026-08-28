@@ -150,8 +150,26 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        if (typeof window !== "undefined" && window.pendo) {
+          window.pendo.track("ai_schedule_generated", {
+            hours: todaysHours,
+            taskCount: tasks?.length ?? 0,
+            generatedTaskCount: response.tasks?.length ?? 0,
+            generatedTaskItemCount: response.taskItems?.length ?? 0,
+          });
+        }
       }
     } catch (err: any) {
+      if (typeof window !== "undefined" && window.pendo) {
+        window.pendo.track("ai_schedule_generation_failed", {
+          errorMessage: String(err.message || "Unknown error").substring(
+            0,
+            100,
+          ),
+          statusCode: err.statusCode ?? 0,
+          isOutOfCredits: err.statusCode === 402,
+        });
+      }
       if (err.statusCode === 402) {
         toast({
           title: "⚠️ You are out of credits!",
