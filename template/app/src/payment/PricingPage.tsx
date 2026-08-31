@@ -82,6 +82,15 @@ const PricingPage = () => {
       const checkoutResults = await generateCheckoutSession(paymentPlanId);
 
       if (checkoutResults?.sessionUrl) {
+        if (typeof window !== "undefined" && window.pendo) {
+          const planCard = paymentPlanCards[paymentPlanId];
+          window.pendo.track("checkout_initiated", {
+            paymentPlanId: paymentPlanId,
+            planName: planCard.name,
+            planPrice: planCard.price,
+            planEffect: paymentPlans[paymentPlanId].effect.kind,
+          });
+        }
         window.open(checkoutResults.sessionUrl, "_self");
       } else {
         throw new Error("Error generating checkout session URL");
@@ -153,11 +162,11 @@ const PricingPage = () => {
             >
               {planId === bestDealPaymentPlanId && (
                 <div
-                  className="absolute top-0 right-0 -z-10 h-full w-full transform-gpu blur-3xl"
+                  className="absolute right-0 top-0 -z-10 h-full w-full transform-gpu blur-3xl"
                   aria-hidden="true"
                 >
                   <div
-                    className="from-primary/40 via-primary/20 to-primary/10 absolute h-full w-full bg-linear-to-br opacity-30"
+                    className="from-primary/40 via-primary/20 to-primary/10 bg-linear-to-br absolute h-full w-full opacity-30"
                     style={{
                       clipPath: "circle(670% at 50% 50%)",
                     }}
@@ -168,7 +177,7 @@ const PricingPage = () => {
                 <div className="flex items-center justify-between gap-x-4">
                   <CardTitle
                     id={planId}
-                    className="text-foreground text-lg leading-8 font-semibold"
+                    className="text-foreground text-lg font-semibold leading-8"
                   >
                     {paymentPlanCards[planId].name}
                   </CardTitle>
@@ -180,7 +189,7 @@ const PricingPage = () => {
                   <span className="text-foreground text-4xl font-bold tracking-tight">
                     {paymentPlanCards[planId].price}
                   </span>
-                  <span className="text-muted-foreground text-sm leading-6 font-semibold">
+                  <span className="text-muted-foreground text-sm font-semibold leading-6">
                     {paymentPlans[planId].effect.kind === "subscription" &&
                       "/month"}
                   </span>
