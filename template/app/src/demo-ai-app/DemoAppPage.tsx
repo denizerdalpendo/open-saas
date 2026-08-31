@@ -136,6 +136,11 @@ function NewTaskForm({
   const handleSubmit = async () => {
     try {
       await handleCreateTask({ description });
+      if (typeof window !== "undefined" && window.pendo) {
+        window.pendo.track("task_created", {
+          descriptionLength: description.length,
+        });
+      }
       setDescription("");
     } catch (err: any) {
       window.alert("Error: " + (err.message || "Something went wrong"));
@@ -149,6 +154,14 @@ function NewTaskForm({
         hours: todaysHours,
       });
       if (response) {
+        if (typeof window !== "undefined" && window.pendo) {
+          window.pendo.track("schedule_generated", {
+            hours: todaysHours,
+            taskCount: tasks?.length ?? 0,
+            generatedTaskCount: response.tasks?.length ?? 0,
+            generatedSubtaskCount: response.taskItems?.length ?? 0,
+          });
+        }
         setResponse(response);
       }
     } catch (err: any) {
