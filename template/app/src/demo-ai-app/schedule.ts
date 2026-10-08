@@ -1,3 +1,8 @@
+// Shared with the client so it can report the model and tool used to Pendo.
+// You can use any model here, e.g. 'gpt-3.5-turbo', 'gpt-4', etc.
+export const SCHEDULE_GENERATION_MODEL = "gpt-3.5-turbo";
+export const PARSE_TODAYS_SCHEDULE_TOOL_NAME = "parseTodaysSchedule";
+
 export type TaskPriority = "low" | "medium" | "high";
 
 export type GeneratedSchedule = {
