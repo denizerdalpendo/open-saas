@@ -20,6 +20,7 @@ import {
 } from "../../../client/components/ui/select";
 import { Switch } from "../../../client/components/ui/switch";
 import useDebounce from "../../../client/hooks/useDebounce";
+import { trackPendoEvent } from "../../../client/pendo";
 import { SubscriptionStatus } from "../../../payment/plans";
 import LoadingSpinner from "../../layout/LoadingSpinner";
 import DropdownEditDelete from "./DropdownEditDelete";
@@ -28,16 +29,27 @@ function AdminSwitch({ id, isAdmin }: Pick<User, "id" | "isAdmin">) {
   const { data: currentUser } = useAuth();
   const isCurrentUser = currentUser?.id === id;
 
+  const handleIsAdminChange = async (newIsAdmin: boolean) => {
+    await updateIsUserAdminById({ id: id, isAdmin: newIsAdmin });
+    trackPendoEvent("user_admin_role_changed", {
+      targetUserId: id,
+      newIsAdmin,
+      previousIsAdmin: isAdmin,
+    });
+  };
+
   return (
     <Switch
       checked={isAdmin}
-      onCheckedChange={(value) =>
-        updateIsUserAdminById({ id: id, isAdmin: value })
-      }
+      onCheckedChange={handleIsAdminChange}
       disabled={isCurrentUser}
     />
   );
 }
+
+// Module-level, so the `admin_users_filtered` Pendo event isn't re-sent for
+// the same filters when the table remounts.
+let lastTrackedUsersFilterKey: string | undefined;
 
 const UsersTable = () => {
   const [currentPage, setCurrentPage] = useState(1);
@@ -69,6 +81,48 @@ const UsersTable = () => {
       setCurrentPage(1);
     },
     [debouncedEmailFilter, subscriptionStatusFilter, isAdminFilter],
+  );
+
+  useEffect(
+    function trackUsersFiltered() {
+      if (!data) {
+        return;
+      }
+
+      const subscriptionStatuses = subscriptionStatusFilter
+        .map((status) => status ?? "not_subscribed")
+        .sort();
+      // Pagination and refetches don't change the filters, so they're not tracked.
+      const filterKey = JSON.stringify([
+        debouncedEmailFilter,
+        isAdminFilter,
+        subscriptionStatuses,
+      ]);
+      if (filterKey === lastTrackedUsersFilterKey) {
+        return;
+      }
+      lastTrackedUsersFilterKey = filterKey;
+
+      const activeFilterCount =
+        Number(!!debouncedEmailFilter) +
+        Number(isAdminFilter !== undefined) +
+        subscriptionStatuses.length;
+      if (activeFilterCount === 0) {
+        return;
+      }
+
+      trackPendoEvent("admin_users_filtered", {
+        hasEmailFilter: !!debouncedEmailFilter,
+        emailFilterLength: debouncedEmailFilter?.length ?? 0,
+        isAdminFilter:
+          isAdminFilter === undefined ? "both" : String(isAdminFilter),
+        subscriptionStatusFilter: subscriptionStatuses,
+        activeFilterCount,
+        resultCount: data.users.length,
+        totalPages: data.totalPages,
+      });
+    },
+    [data, debouncedEmailFilter, isAdminFilter, subscriptionStatusFilter],
   );
 
   const handleStatusToggle = (status: SubscriptionStatus | null) => {

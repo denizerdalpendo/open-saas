@@ -1,9 +1,11 @@
 import { type PrismaClient } from "@prisma/client";
 import express from "express";
 import type { Stripe } from "stripe";
+import { type User } from "wasp/entities";
 import { type MiddlewareConfigFn } from "wasp/server";
 import { type PaymentsWebhook } from "wasp/server/api";
 import { emailSender } from "wasp/server/email";
+import { trackPendoServerEvent } from "../../server/pendo";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
@@ -108,8 +110,8 @@ async function handleInvoicePaid(
   );
 
   switch (paymentPlanId) {
-    case PaymentPlanId.Credits10:
-      await updateUserCredits(
+    case PaymentPlanId.Credits10: {
+      const user = await updateUserCredits(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -117,10 +119,24 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      await trackPendoServerEvent({
+        event: "credits_purchased",
+        visitorId: user.id,
+        properties: {
+          paymentPlanId,
+          numOfCreditsPurchased: paymentPlans[paymentPlanId].effect.amount,
+          newCreditBalance: user.credits,
+          amountPaid: invoice.amount_paid / 100,
+          currency: invoice.currency,
+          datePaid: invoicePaidAtDate.toISOString(),
+          paymentProcessor: "stripe",
+        },
+      });
       break;
+    }
     case PaymentPlanId.Pro:
-    case PaymentPlanId.Hobby:
-      await updateUserSubscription(
+    case PaymentPlanId.Hobby: {
+      const user = await updateUserSubscription(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -129,7 +145,23 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      await trackPendoServerEvent({
+        event: "subscription_payment_succeeded",
+        visitorId: user.id,
+        properties: {
+          paymentPlanId,
+          // `subscription_create` for new subscriptions, `subscription_cycle` for renewals.
+          billingReason: invoice.billing_reason,
+          amountPaid: invoice.amount_paid / 100,
+          currency: invoice.currency,
+          invoiceId: invoice.id,
+          datePaid: invoicePaidAtDate.toISOString(),
+          subscriptionStatus: SubscriptionStatus.Active,
+          paymentProcessor: "stripe",
+        },
+      });
       break;
+    }
     default:
       assertUnreachable(paymentPlanId);
   }
@@ -180,6 +212,119 @@ async function handleCustomerSubscriptionUpdated(
       text: "We hate to see you go. Here is a sweet offer...",
       html: "We hate to see you go. Here is a sweet offer...",
     });
+  }
+
+  await trackSubscriptionUpdatedInPendo(
+    event,
+    user,
+    paymentPlanId,
+    subscriptionStatus,
+  );
+}
+
+/**
+ * Sends Pendo Track Events for the subscription changes in a
+ * `customer.subscription.updated` event. Each one is gated on
+ * `previous_attributes`, which only holds the fields that changed in this
+ * update, so unrelated or repeated updates don't send them again.
+ */
+async function trackSubscriptionUpdatedInPendo(
+  event: Stripe.CustomerSubscriptionUpdatedEvent,
+  user: User,
+  paymentPlanId: PaymentPlanId,
+  subscriptionStatus: SubscriptionStatus,
+): Promise<void> {
+  const subscription = event.data.object;
+  const previousAttributes = event.data.previous_attributes;
+
+  try {
+    if (
+      subscription.cancel_at_period_end &&
+      previousAttributes?.cancel_at_period_end === false
+    ) {
+      await trackPendoServerEvent({
+        event: "subscription_canceled",
+        visitorId: user.id,
+        properties: {
+          paymentPlanId,
+          subscriptionStatus,
+          cancelAt: subscription.cancel_at
+            ? new Date(subscription.cancel_at * 1000).toISOString()
+            : null,
+          cancellationReason: subscription.cancellation_details?.reason,
+          cancellationFeedback: subscription.cancellation_details?.feedback,
+          winBackEmailSent: !!user.email,
+          paymentProcessor: "stripe",
+        },
+      });
+    }
+
+    const previousPriceId = previousAttributes?.items?.data[0]?.price.id;
+    if (previousPriceId) {
+      const previousPaymentPlanId =
+        getPaymentPlanIdByPaymentProcessorPlanId(previousPriceId);
+      if (previousPaymentPlanId !== paymentPlanId) {
+        await trackPendoServerEvent({
+          event: "subscription_plan_changed",
+          visitorId: user.id,
+          properties: {
+            previousPaymentPlanId,
+            newPaymentPlanId: paymentPlanId,
+            changeDirection:
+              paymentPlanId === PaymentPlanId.Pro ? "upgrade" : "downgrade",
+            subscriptionStatus,
+            paymentProcessor: "stripe",
+          },
+        });
+      }
+    }
+
+    // `status` is only in `previous_attributes` if it changed in this update.
+    const previousStripeStatus = previousAttributes?.status;
+    if (!previousStripeStatus) {
+      return;
+    }
+
+    if (subscriptionStatus === SubscriptionStatus.PastDue) {
+      await trackPendoServerEvent({
+        event: "subscription_payment_past_due",
+        visitorId: user.id,
+        properties: {
+          paymentPlanId,
+          subscriptionStatus,
+          previousSubscriptionStatus: previousStripeStatus,
+          latestInvoiceId:
+            typeof subscription.latest_invoice === "string"
+              ? subscription.latest_invoice
+              : subscription.latest_invoice?.id,
+          paymentProcessor: "stripe",
+        },
+      });
+    }
+
+    // Canceled subscriptions are tracked when `customer.subscription.deleted`
+    // arrives, and `incomplete_expired` ones never had access, so only
+    // `unpaid` subscriptions lose access here.
+    if (subscription.status === "unpaid") {
+      await trackPendoServerEvent({
+        event: "subscription_ended",
+        visitorId: user.id,
+        properties: {
+          paymentPlanId,
+          subscriptionStatus,
+          endReason:
+            subscription.cancellation_details?.reason ?? subscription.status,
+          cancellationFeedback: subscription.cancellation_details?.feedback,
+          paymentProcessor: "stripe",
+        },
+      });
+    }
+  } catch (error) {
+    // E.g. a previous price that isn't one of our payment plans anymore.
+    console.error(
+      "Failed to track Stripe subscription update in Pendo:",
+      error,
+    );
   }
 }
 
@@ -235,13 +380,38 @@ async function handleCustomerSubscriptionDeleted(
   const subscription = event.data.object;
   const customerId = getCustomerId(subscription.customer);
 
-  await updateUserSubscription(
+  // Read before the update, so a subscription that already lost access (e.g.
+  // became `unpaid`) isn't reported to Pendo as ended twice.
+  const previousSubscriptionStatus = (
+    await prismaUserDelegate.findUnique({
+      where: { paymentProcessorUserId: customerId },
+      select: { subscriptionStatus: true },
+    })
+  )?.subscriptionStatus;
+
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: customerId,
       subscriptionStatus: SubscriptionStatus.Deleted,
     },
     prismaUserDelegate,
   );
+
+  if (previousSubscriptionStatus !== SubscriptionStatus.Deleted) {
+    await trackPendoServerEvent({
+      event: "subscription_ended",
+      visitorId: user.id,
+      properties: {
+        // Not cleared by the update above, so it's still the ended plan.
+        paymentPlanId: user.subscriptionPlan,
+        subscriptionStatus: SubscriptionStatus.Deleted,
+        endReason:
+          subscription.cancellation_details?.reason ?? subscription.status,
+        cancellationFeedback: subscription.cancellation_details?.feedback,
+        paymentProcessor: "stripe",
+      },
+    });
+  }
 }
 
 function getCustomerId(

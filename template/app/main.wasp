@@ -72,6 +72,10 @@ app OpenSaaS {
     },
     onAuthFailedRedirectTo: "/login",
     onAuthSucceededRedirectTo: "/demo-app",
+    // Send Pendo Track Events for signups, email verifications and logins.
+    onAfterSignup: import { onAfterSignup } from "@src/auth/hooks",
+    onAfterEmailVerified: import { onAfterEmailVerified } from "@src/auth/hooks",
+    onAfterLogin: import { onAfterLogin } from "@src/auth/hooks",
   },
 
   db: {

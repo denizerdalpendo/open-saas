@@ -1,4 +1,6 @@
 import type { CookieConsentConfig } from "vanilla-cookieconsent";
+import * as CookieConsent from "vanilla-cookieconsent";
+import { trackPendoEvent } from "../../pendo";
 
 declare global {
   interface Window {
@@ -34,6 +36,19 @@ const getConfig = () => {
         equalWeightButtons: true,
         flipButtons: false,
       },
+    },
+
+    onFirstConsent: ({ cookie }) => {
+      trackCookieConsentUpdated({
+        isFirstConsent: true,
+        consentRevision: cookie.revision,
+      });
+    },
+    onChange: ({ cookie }) => {
+      trackCookieConsentUpdated({
+        isFirstConsent: false,
+        consentRevision: cookie.revision,
+      });
     },
 
     categories: {
@@ -114,5 +129,23 @@ const getConfig = () => {
 
   return config;
 };
+
+function trackCookieConsentUpdated({
+  isFirstConsent,
+  consentRevision,
+}: {
+  isFirstConsent: boolean;
+  consentRevision: number;
+}) {
+  const { acceptType, acceptedCategories, rejectedCategories } =
+    CookieConsent.getUserPreferences();
+  trackPendoEvent("cookie_consent_updated", {
+    acceptType,
+    acceptedCategories,
+    rejectedCategories,
+    isFirstConsent,
+    consentRevision,
+  });
+}
 
 export default getConfig;

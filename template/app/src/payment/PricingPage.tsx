@@ -15,6 +15,7 @@ import {
   CardFooter,
   CardTitle,
 } from "../client/components/ui/card";
+import { trackPendoEvent } from "../client/pendo";
 import { cn } from "../client/utils";
 import {
   PaymentPlanId,
@@ -82,12 +83,29 @@ const PricingPage = () => {
       const checkoutResults = await generateCheckoutSession(paymentPlanId);
 
       if (checkoutResults?.sessionUrl) {
+        // Tracked before the same-window redirect below, so the event isn't lost.
+        trackPendoEvent("checkout_session_created", {
+          paymentPlanId,
+          planName: paymentPlanCards[paymentPlanId].name,
+          planPrice: paymentPlanCards[paymentPlanId].price,
+          planKind: paymentPlans[paymentPlanId].effect.kind,
+          isBestDealPlan: paymentPlanId === bestDealPaymentPlanId,
+          checkoutSessionId: checkoutResults.sessionId,
+          currentSubscriptionStatus: user.subscriptionStatus ?? "none",
+          credits: user.credits,
+        });
         window.open(checkoutResults.sessionUrl, "_self");
       } else {
         throw new Error("Error generating checkout session URL");
       }
     } catch (error: unknown) {
       console.error(error);
+      trackPendoEvent("checkout_session_failed", {
+        paymentPlanId,
+        planKind: paymentPlans[paymentPlanId].effect.kind,
+        errorMessage: error instanceof Error ? error.message : "unknown",
+        errorStatusCode: getErrorStatusCode(error),
+      });
       if (error instanceof Error) {
         setErrorMessage(error.message);
       } else {
@@ -234,5 +252,14 @@ const PricingPage = () => {
     </div>
   );
 };
+
+function getErrorStatusCode(error: unknown): number | undefined {
+  // Errors thrown by Wasp operations carry the server's HTTP status code.
+  return error instanceof Error &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+    ? error.statusCode
+    : undefined;
+}
 
 export default PricingPage;
