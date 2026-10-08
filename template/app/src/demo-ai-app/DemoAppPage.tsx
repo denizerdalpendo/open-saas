@@ -31,6 +31,21 @@ import type {
   TaskItem,
   TaskPriority,
 } from "./schedule";
+import {
+  PARSE_TODAYS_SCHEDULE_TOOL_NAME,
+  SCHEDULE_GENERATION_MODEL,
+} from "./schedule";
+
+// Identifies the AI Day Scheduler agent in Pendo Agent Analytics.
+const SCHEDULE_AGENT_ID = "aV-YJH86TICPxLqR4m29b3l5l4I";
+
+// `crypto.randomUUID()` is only available in secure contexts (HTTPS or localhost),
+// so fall back to a timestamp-based ID elsewhere instead of throwing.
+function generateTrackingId(fallbackPrefix: string): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${fallbackPrefix}_${Date.now()}`;
+}
 
 export default function DemoAppPage() {
   return (
@@ -129,6 +144,10 @@ function NewTaskForm({
     ],
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
+  // Groups the schedules generated during this visit into one Pendo conversation.
+  const [conversationId] = useState<string>(() =>
+    generateTrackingId("conversation"),
+  );
 
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
@@ -145,11 +164,34 @@ function NewTaskForm({
   const handleGeneratePlan = async () => {
     try {
       setIsPlanGenerating(true);
+      // The schedule prompt is built on the server from these same inputs.
+      window.pendo?.trackAgent("prompt", {
+        agentId: SCHEDULE_AGENT_ID,
+        conversationId,
+        messageId: generateTrackingId("prompt"),
+        content: JSON.stringify({
+          hours: todaysHours,
+          tasks: (tasks ?? []).map((task: Task) => ({
+            description: task.description,
+            time: task.time,
+          })),
+        }),
+        suggestedPrompt: false,
+        fileUploaded: false,
+      });
       const response = await generateGptResponse({
         hours: todaysHours,
       });
       if (response) {
         setResponse(response);
+        window.pendo?.trackAgent("agent_response", {
+          agentId: SCHEDULE_AGENT_ID,
+          conversationId,
+          messageId: generateTrackingId("agent_response"),
+          content: JSON.stringify(response),
+          modelUsed: SCHEDULE_GENERATION_MODEL,
+          toolsUsed: [PARSE_TODAYS_SCHEDULE_TOOL_NAME],
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {

@@ -13,7 +13,12 @@ import type {
 import * as z from "zod";
 import { SubscriptionStatus } from "../payment/plans";
 import { ensureArgsSchemaOrThrowHttpError } from "../server/validation";
-import { GeneratedSchedule, TaskPriority } from "./schedule";
+import {
+  GeneratedSchedule,
+  PARSE_TODAYS_SCHEDULE_TOOL_NAME,
+  SCHEDULE_GENERATION_MODEL,
+  TaskPriority,
+} from "./schedule";
 
 const openAi = setUpOpenAi();
 function setUpOpenAi(): OpenAI {
@@ -257,7 +262,7 @@ async function generateScheduleWithGpt(
   }));
 
   const completion = await openAi.chat.completions.create({
-    model: "gpt-3.5-turbo", // you can use any model here, e.g. 'gpt-3.5-turbo', 'gpt-4', etc.
+    model: SCHEDULE_GENERATION_MODEL,
     messages: [
       {
         role: "system",
@@ -275,7 +280,7 @@ async function generateScheduleWithGpt(
       {
         type: "function",
         function: {
-          name: "parseTodaysSchedule",
+          name: PARSE_TODAYS_SCHEDULE_TOOL_NAME,
           description: "parses the days tasks and returns a schedule",
           parameters: {
             type: "object",
@@ -330,7 +335,7 @@ async function generateScheduleWithGpt(
     tool_choice: {
       type: "function",
       function: {
-        name: "parseTodaysSchedule",
+        name: PARSE_TODAYS_SCHEDULE_TOOL_NAME,
       },
     },
     temperature: 1,
