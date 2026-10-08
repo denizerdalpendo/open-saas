@@ -1,5 +1,6 @@
 import { type Task } from "wasp/entities";
 
+import { useAuth } from "wasp/client/auth";
 import {
   createTask,
   deleteTask,
@@ -24,6 +25,7 @@ import { Input } from "../client/components/ui/input";
 import { Label } from "../client/components/ui/label";
 import { ToastAction } from "../client/components/ui/toast";
 import { toast } from "../client/hooks/use-toast";
+import { trackPendoEvent } from "../client/pendo";
 import { cn } from "../client/utils";
 import type {
   GeneratedSchedule,
@@ -58,11 +60,14 @@ export default function DemoAppPage() {
   );
 }
 
+type TaskInputMethod = "enter_key" | "add_button";
+
 function NewTaskForm({
   handleCreateTask,
 }: {
   handleCreateTask: typeof createTask;
 }) {
+  const { data: user } = useAuth();
   const [description, setDescription] = useState<string>("");
   const [todaysHours, setTodaysHours] = useState<number>(8);
   const [response, setResponse] = useState<GeneratedSchedule | null>({
@@ -133,9 +138,17 @@ function NewTaskForm({
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (inputMethod: TaskInputMethod) => {
     try {
-      await handleCreateTask({ description });
+      const createdTask = await handleCreateTask({ description });
+      const previousTaskCount = tasks?.length ?? 0;
+      trackPendoEvent("task_created", {
+        taskId: createdTask.id,
+        descriptionLength: description.length,
+        inputMethod,
+        taskCountAfterCreate: previousTaskCount + 1,
+        isFirstTask: previousTaskCount === 0,
+      });
       setDescription("");
     } catch (err: any) {
       window.alert("Error: " + (err.message || "Something went wrong"));
@@ -143,6 +156,7 @@ function NewTaskForm({
   };
 
   const handleGeneratePlan = async () => {
+    const generationStartedAt = Date.now();
     try {
       setIsPlanGenerating(true);
       const response = await generateGptResponse({
@@ -150,9 +164,37 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        trackPendoEvent("ai_schedule_generated", {
+          hours: todaysHours,
+          inputTaskCount: tasks?.length ?? 0,
+          doneInputTaskCount: tasks?.filter((task) => task.isDone).length ?? 0,
+          generatedTaskCount: response.tasks?.length ?? 0,
+          generatedSubtaskCount: response.taskItems?.length ?? 0,
+          scheduledHours: getScheduledHours(response),
+          highPriorityTaskCount: (response.tasks ?? []).filter(
+            (task) => task.priority === "high",
+          ).length,
+          generationDurationMs: Date.now() - generationStartedAt,
+          creditsBeforeGeneration: user?.credits,
+          subscriptionStatus: user?.subscriptionStatus ?? "none",
+          subscriptionPlan: user?.subscriptionPlan ?? "free",
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
+        trackPendoEvent("ai_credits_exhausted", {
+          hours: todaysHours,
+          inputTaskCount: tasks?.length ?? 0,
+          credits: user?.credits,
+          subscriptionStatus: user?.subscriptionStatus ?? "none",
+          subscriptionPlan: user?.subscriptionPlan ?? "free",
+          daysSinceSignup: user
+            ? Math.floor(
+                (Date.now() - new Date(user.createdAt).getTime()) /
+                  (1000 * 60 * 60 * 24),
+              )
+            : undefined,
+        });
         toast({
           title: "⚠️ You are out of credits!",
           style: {
@@ -170,6 +212,14 @@ function NewTaskForm({
           ),
         });
       } else {
+        trackPendoEvent("ai_schedule_generation_failed", {
+          errorStatusCode: err.statusCode,
+          errorMessage: err.message,
+          hours: todaysHours,
+          inputTaskCount: tasks?.length ?? 0,
+          generationDurationMs: Date.now() - generationStartedAt,
+          subscriptionStatus: user?.subscriptionStatus ?? "none",
+        });
         toast({
           title: "Error",
           description: err.message || "Something went wrong",
@@ -194,13 +244,13 @@ function NewTaskForm({
             onChange={(e) => setDescription(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                handleSubmit();
+                handleSubmit("enter_key");
               }
             }}
           />
           <Button
             type="button"
-            onClick={handleSubmit}
+            onClick={() => handleSubmit("add_button")}
             disabled={!description}
             variant="default"
             size="default"
@@ -284,6 +334,15 @@ function NewTaskForm({
   );
 }
 
+function getScheduledHours(schedule: GeneratedSchedule): number {
+  // The schedule comes from OpenAI, so guard against non-numeric times.
+  const scheduledHours = (schedule.taskItems ?? []).reduce(
+    (sum, taskItem) => sum + (Number(taskItem.time) || 0),
+    0,
+  );
+  return Math.round(scheduledHours * 100) / 100;
+}
+
 type TodoProps = Pick<Task, "id" | "isDone" | "description" | "time">;
 
 function Todo({ id, isDone, description, time }: TodoProps) {
@@ -292,6 +351,13 @@ function Todo({ id, isDone, description, time }: TodoProps) {
       id,
       isDone: checked,
     });
+    if (checked) {
+      trackPendoEvent("task_completed", {
+        taskId: id,
+        estimatedHours: Number(time),
+        descriptionLength: description.length,
+      });
+    }
   };
 
   const handleTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -25,16 +25,23 @@ import { Input } from "../client/components/ui/input";
 import { Label } from "../client/components/ui/label";
 import { Progress } from "../client/components/ui/progress";
 import { toast } from "../client/hooks/use-toast";
+import { trackPendoEvent } from "../client/pendo";
 import { cn } from "../client/utils";
 import { uploadFileWithProgress, validateFile } from "./fileUploading";
 import { ALLOWED_FILE_TYPES } from "./validation";
+
+type FileUploadStage =
+  | "validation"
+  | "get_upload_url"
+  | "s3_upload"
+  | "save_to_db";
 
 export default function FileUploadPage() {
   const [fileKeyForS3, setFileKeyForS3] = useState<File["s3Key"]>("");
   const [uploadProgressPercent, setUploadProgressPercent] = useState<number>(0);
   const [fileToDelete, setFileToDelete] = useState<Pick<
     File,
-    "id" | "s3Key" | "name"
+    "id" | "s3Key" | "name" | "type" | "createdAt"
   > | null>(null);
 
   const allUserFiles = useQuery(getAllFilesByUser, undefined, {
@@ -66,9 +73,20 @@ export default function FileUploadPage() {
                 variant: "destructive",
               });
               return;
-            case "success":
+            case "success": {
+              const downloadedFile = allUserFiles.data?.find(
+                (file) => file.s3Key === fileKeyForS3,
+              );
+              trackPendoEvent("file_downloaded", {
+                fileId: downloadedFile?.id,
+                fileType: downloadedFile?.type,
+                fileAgeDays: downloadedFile
+                  ? getDaysSince(downloadedFile.createdAt)
+                  : undefined,
+              });
               window.open(urlQuery.data, "_blank");
               return;
+            }
           }
         })
         .finally(() => {
@@ -78,6 +96,12 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    const uploadStartedAt = Date.now();
+    // Tracked for the `file_upload_failed` Pendo event.
+    let uploadStage: FileUploadStage = "validation";
+    let selectedFileType: string | undefined;
+    let selectedFileSizeBytes: number | undefined;
+    let lastUploadProgressPercent = 0;
     try {
       e.preventDefault();
 
@@ -94,6 +118,9 @@ export default function FileUploadPage() {
         !(formDataFileUpload instanceof File) ||
         formDataFileUpload.size === 0
       ) {
+        trackPendoEvent("file_upload_failed", {
+          failureStage: "no_file_selected",
+        });
         toast({
           title: "No file selected",
           description: "Please select a file to upload.",
@@ -102,26 +129,41 @@ export default function FileUploadPage() {
         return;
       }
 
+      selectedFileType = formDataFileUpload.type;
+      selectedFileSizeBytes = formDataFileUpload.size;
       const file = validateFile(formDataFileUpload);
 
+      uploadStage = "get_upload_url";
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
         fileName: file.name,
       });
 
+      uploadStage = "s3_upload";
       await uploadFileWithProgress({
         file,
         s3UploadUrl,
         s3UploadFields,
-        setUploadProgressPercent,
+        setUploadProgressPercent: (percentage) => {
+          lastUploadProgressPercent = percentage;
+          setUploadProgressPercent(percentage);
+        },
       });
 
+      uploadStage = "save_to_db";
       await addFileToDb({
         s3Key,
         fileType: file.type,
         fileName: file.name,
       });
 
+      trackPendoEvent("file_uploaded", {
+        fileType: file.type,
+        fileSizeBytes: file.size,
+        fileExtension: getFileExtension(file.name),
+        uploadDurationMs: Date.now() - uploadStartedAt,
+        userFileCount: (allUserFiles.data?.length ?? 0) + 1,
+      });
       formElement.reset();
       allUserFiles.refetch();
       toast({
@@ -132,6 +174,13 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+      trackPendoEvent("file_upload_failed", {
+        failureStage: uploadStage,
+        errorMessage,
+        fileType: selectedFileType,
+        fileSizeBytes: selectedFileSizeBytes,
+        lastUploadProgressPercent,
+      });
       toast({
         title: "Error uploading file",
         description: errorMessage,
@@ -142,9 +191,20 @@ export default function FileUploadPage() {
     }
   };
 
-  const handleDelete = async ({ id, name }: Pick<File, "id" | "name">) => {
+  const handleDelete = async ({
+    id,
+    name,
+    type,
+    createdAt,
+  }: Pick<File, "id" | "name" | "type" | "createdAt">) => {
     try {
       await deleteFile({ id });
+      trackPendoEvent("file_deleted", {
+        fileId: id,
+        fileType: type,
+        fileAgeDays: getDaysSince(createdAt),
+        remainingFileCount: Math.max((allUserFiles.data?.length ?? 1) - 1, 0),
+      });
       toast({
         title: "File deleted",
         description: (
@@ -316,4 +376,15 @@ export default function FileUploadPage() {
       )}
     </>
   );
+}
+
+function getDaysSince(date: Date): number {
+  return Math.floor(
+    (Date.now() - new Date(date).getTime()) / (1000 * 60 * 60 * 24),
+  );
+}
+
+function getFileExtension(fileName: string): string | undefined {
+  // Only a short extension is reported, never (parts of) the file name itself.
+  return /\.([a-z0-9]{1,10})$/i.exec(fileName)?.[1].toLowerCase();
 }
