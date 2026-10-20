@@ -53,6 +53,17 @@ export const paymentPlanCards: Record<PaymentPlanId, PaymentPlanCard> = {
   },
 };
 
+/**
+ * Errors thrown by failed Wasp operations include the HTTP status code of the response.
+ */
+function getErrorStatusCode(error: unknown): number | undefined {
+  return error instanceof Error &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+    ? error.statusCode
+    : undefined;
+}
+
 const PricingPage = () => {
   const [isPaymentLoading, setIsPaymentLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -88,6 +99,14 @@ const PricingPage = () => {
       }
     } catch (error: unknown) {
       console.error(error);
+      window.pendo?.track("checkout_session_failed", {
+        paymentPlanId,
+        planEffectKind: paymentPlans[paymentPlanId].effect.kind,
+        statusCode: getErrorStatusCode(error),
+        // Truncated to stay within Pendo's size limit for track event properties.
+        errorMessage:
+          error instanceof Error ? error.message.slice(0, 200) : undefined,
+      });
       if (error instanceof Error) {
         setErrorMessage(error.message);
       } else {
