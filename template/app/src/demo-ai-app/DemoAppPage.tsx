@@ -25,6 +25,7 @@ import { Label } from "../client/components/ui/label";
 import { ToastAction } from "../client/components/ui/toast";
 import { toast } from "../client/hooks/use-toast";
 import { cn } from "../client/utils";
+import { createTrackingId, trackAgentEvent } from "./pendoAgentTracking";
 import type {
   GeneratedSchedule,
   Task as ScheduleTask,
@@ -129,6 +130,9 @@ function NewTaskForm({
     ],
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
+  // Groups the schedule generations of one visit to this page into a single
+  // Pendo conversation.
+  const [conversationId] = useState(() => createTrackingId("conversation"));
 
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
@@ -145,11 +149,31 @@ function NewTaskForm({
   const handleGeneratePlan = async () => {
     try {
       setIsPlanGenerating(true);
+      // There is no free-text prompt: the user's input to the agent is their
+      // task list and the hours they will work today.
+      trackAgentEvent("prompt", {
+        conversationId,
+        messageId: createTrackingId("prompt"),
+        content: JSON.stringify({
+          hours: todaysHours,
+          tasks: (tasks ?? []).map((task) => ({
+            description: task.description,
+            time: task.time,
+          })),
+        }),
+        suggestedPrompt: false,
+        fileUploaded: false,
+      });
       const response = await generateGptResponse({
         hours: todaysHours,
       });
       if (response) {
         setResponse(response);
+        trackAgentEvent("agent_response", {
+          conversationId,
+          messageId: createTrackingId("agent_response"),
+          content: JSON.stringify(response),
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
