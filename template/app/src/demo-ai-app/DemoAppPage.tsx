@@ -1,5 +1,6 @@
 import { type Task } from "wasp/entities";
 
+import { useAuth } from "wasp/client/auth";
 import {
   createTask,
   deleteTask,
@@ -25,6 +26,7 @@ import { Label } from "../client/components/ui/label";
 import { ToastAction } from "../client/components/ui/toast";
 import { toast } from "../client/hooks/use-toast";
 import { cn } from "../client/utils";
+import { SubscriptionStatus } from "../payment/plans";
 import type {
   GeneratedSchedule,
   Task as ScheduleTask,
@@ -130,6 +132,7 @@ function NewTaskForm({
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
 
+  const { data: user } = useAuth();
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
 
@@ -150,8 +153,40 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        // OpenAI's response isn't guaranteed to include every field, hence the fallbacks.
+        const generatedTasks = response.tasks ?? [];
+        const generatedTaskItems = response.taskItems ?? [];
+        const totalScheduledHours = generatedTaskItems.reduce(
+          (totalHours, taskItem) => totalHours + (Number(taskItem.time) || 0),
+          0,
+        );
+        window.pendo?.track("schedule_generated", {
+          hours: todaysHours,
+          taskCount: tasks?.length ?? 0,
+          generatedTaskCount: generatedTasks.length,
+          generatedSubtaskCount: generatedTaskItems.length,
+          highPriorityTaskCount: generatedTasks.filter(
+            (task) => task.priority === "high",
+          ).length,
+          totalScheduledHours: Math.round(totalScheduledHours * 100) / 100,
+          creditsBeforeGeneration: user?.credits,
+          // Same logic as `isUserSubscribed` in `generateGptResponse`.
+          isSubscribed:
+            user?.subscriptionStatus === SubscriptionStatus.Active ||
+            user?.subscriptionStatus === SubscriptionStatus.CancelAtPeriodEnd,
+        });
       }
     } catch (err: any) {
+      window.pendo?.track("schedule_generation_failed", {
+        failureReason:
+          err.statusCode === 402 ? "out_of_credits" : "generation_error",
+        statusCode: err.statusCode,
+        // Truncated to stay within Pendo's size limit for track event properties.
+        errorMessage: err.message?.slice(0, 200),
+        hours: todaysHours,
+        taskCount: tasks?.length ?? 0,
+        subscriptionStatus: user?.subscriptionStatus ?? "none",
+      });
       if (err.statusCode === 402) {
         toast({
           title: "⚠️ You are out of credits!",

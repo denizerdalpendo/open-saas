@@ -4,6 +4,7 @@ import type { Stripe } from "stripe";
 import { type MiddlewareConfigFn } from "wasp/server";
 import { type PaymentsWebhook } from "wasp/server/api";
 import { emailSender } from "wasp/server/email";
+import { sendPendoTrackEvent } from "../../server/pendo";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
@@ -108,8 +109,8 @@ async function handleInvoicePaid(
   );
 
   switch (paymentPlanId) {
-    case PaymentPlanId.Credits10:
-      await updateUserCredits(
+    case PaymentPlanId.Credits10: {
+      const user = await updateUserCredits(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -117,10 +118,25 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      void sendPendoTrackEvent({
+        event: "credits_purchased",
+        visitorId: user.id,
+        dedupeKey: event.id,
+        properties: {
+          paymentPlanId,
+          numOfCreditsPurchased: paymentPlans[paymentPlanId].effect.amount,
+          creditsBalance: user.credits,
+          amountPaid: invoice.amount_paid, // In the smallest currency unit, e.g. cents.
+          currency: invoice.currency,
+          datePaid: invoicePaidAtDate.toISOString(),
+          paymentProcessor: "stripe",
+        },
+      });
       break;
+    }
     case PaymentPlanId.Pro:
-    case PaymentPlanId.Hobby:
-      await updateUserSubscription(
+    case PaymentPlanId.Hobby: {
+      const user = await updateUserSubscription(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -129,7 +145,23 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      void sendPendoTrackEvent({
+        event: "subscription_payment_succeeded",
+        visitorId: user.id,
+        dedupeKey: event.id,
+        properties: {
+          paymentPlanId,
+          subscriptionStatus: user.subscriptionStatus,
+          // Distinguishes new subscriptions, renewals and plan changes.
+          billingReason: invoice.billing_reason,
+          amountPaid: invoice.amount_paid, // In the smallest currency unit, e.g. cents.
+          currency: invoice.currency,
+          datePaid: invoicePaidAtDate.toISOString(),
+          paymentProcessor: "stripe",
+        },
+      });
       break;
+    }
     default:
       assertUnreachable(paymentPlanId);
   }
@@ -173,6 +205,27 @@ async function handleCustomerSubscriptionUpdated(
     prismaUserDelegate,
   );
 
+  if (
+    hasSubscriptionStatusOrPlanChanged(
+      subscription,
+      event.data.previous_attributes,
+    )
+  ) {
+    void sendPendoTrackEvent({
+      event: "subscription_status_changed",
+      visitorId: user.id,
+      dedupeKey: event.id,
+      properties: {
+        subscriptionStatus,
+        paymentPlanId,
+        cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        cancellationReason: subscription.cancellation_details?.reason ?? null,
+        webhookEventType: event.type,
+        paymentProcessor: "stripe",
+      },
+    });
+  }
+
   if (subscription.cancel_at_period_end && user.email) {
     await emailSender.send({
       to: user.email,
@@ -213,6 +266,35 @@ function getOpenSaasSubscriptionStatus(
   return subscriptionStatus;
 }
 
+/**
+ * Stripe sends `customer.subscription.updated` for many reasons (e.g. renewals or payment
+ * method updates), so we use `previous_attributes` to check if the Open SaaS subscription
+ * status or the subscription plan actually changed.
+ */
+function hasSubscriptionStatusOrPlanChanged(
+  subscription: Stripe.Subscription,
+  previousAttributes: Partial<Stripe.Subscription> | undefined,
+): boolean {
+  if (!previousAttributes) {
+    return false;
+  }
+
+  const previousSubscriptionStatus = getOpenSaasSubscriptionStatus({
+    ...subscription,
+    ...previousAttributes,
+  });
+  const hasSubscriptionStatusChanged =
+    previousSubscriptionStatus !== getOpenSaasSubscriptionStatus(subscription);
+
+  // `previous_attributes` is a partial object, so we don't rely on its shape.
+  const previousPriceId = previousAttributes.items?.data?.[0]?.price?.id;
+  const hasPlanChanged =
+    previousPriceId !== undefined &&
+    previousPriceId !== getSubscriptionPriceId(subscription);
+
+  return hasSubscriptionStatusChanged || hasPlanChanged;
+}
+
 function getSubscriptionPriceId(
   subscription: Stripe.Subscription,
 ): Stripe.Price["id"] {
@@ -235,13 +317,27 @@ async function handleCustomerSubscriptionDeleted(
   const subscription = event.data.object;
   const customerId = getCustomerId(subscription.customer);
 
-  await updateUserSubscription(
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: customerId,
       subscriptionStatus: SubscriptionStatus.Deleted,
     },
     prismaUserDelegate,
   );
+
+  void sendPendoTrackEvent({
+    event: "subscription_status_changed",
+    visitorId: user.id,
+    dedupeKey: event.id,
+    properties: {
+      subscriptionStatus: SubscriptionStatus.Deleted,
+      paymentPlanId: user.subscriptionPlan,
+      cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      cancellationReason: subscription.cancellation_details?.reason ?? null,
+      webhookEventType: event.type,
+      paymentProcessor: "stripe",
+    },
+  });
 }
 
 function getCustomerId(

@@ -29,6 +29,8 @@ import { cn } from "../client/utils";
 import { uploadFileWithProgress, validateFile } from "./fileUploading";
 import { ALLOWED_FILE_TYPES } from "./validation";
 
+type FileUploadStage = "validation" | "presign" | "s3_upload" | "db_save";
+
 export default function FileUploadPage() {
   const [fileKeyForS3, setFileKeyForS3] = useState<File["s3Key"]>("");
   const [uploadProgressPercent, setUploadProgressPercent] = useState<number>(0);
@@ -78,6 +80,9 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    // Kept outside of the `try` block so that upload failures can be reported to Pendo.
+    let uploadStage: FileUploadStage = "validation";
+    let selectedFile: { type: string; size: number } | null = null;
     try {
       e.preventDefault();
 
@@ -102,13 +107,16 @@ export default function FileUploadPage() {
         return;
       }
 
+      selectedFile = formDataFileUpload;
       const file = validateFile(formDataFileUpload);
 
+      uploadStage = "presign";
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
         fileName: file.name,
       });
 
+      uploadStage = "s3_upload";
       await uploadFileWithProgress({
         file,
         s3UploadUrl,
@@ -116,6 +124,7 @@ export default function FileUploadPage() {
         setUploadProgressPercent,
       });
 
+      uploadStage = "db_save";
       await addFileToDb({
         s3Key,
         fileType: file.type,
@@ -124,6 +133,12 @@ export default function FileUploadPage() {
 
       formElement.reset();
       allUserFiles.refetch();
+      // We don't send the file name, as it can contain personal information.
+      window.pendo?.track("file_upload_completed", {
+        fileType: file.type,
+        fileSize: file.size,
+        existingFileCount: allUserFiles.data?.length ?? 0,
+      });
       toast({
         title: "File uploaded",
         description: "Your file has been successfully uploaded.",
@@ -132,6 +147,14 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+      window.pendo?.track("file_upload_failed", {
+        failureStage: uploadStage,
+        // Truncated to stay within Pendo's size limit for track event properties.
+        errorMessage: errorMessage.slice(0, 200),
+        statusCode: getErrorStatusCode(error),
+        fileType: selectedFile?.type,
+        fileSize: selectedFile?.size,
+      });
       toast({
         title: "Error uploading file",
         description: errorMessage,
@@ -316,4 +339,15 @@ export default function FileUploadPage() {
       )}
     </>
   );
+}
+
+/**
+ * Errors thrown by failed Wasp operations include the HTTP status code of the response.
+ */
+function getErrorStatusCode(error: unknown): number | undefined {
+  return error instanceof Error &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+    ? error.statusCode
+    : undefined;
 }
