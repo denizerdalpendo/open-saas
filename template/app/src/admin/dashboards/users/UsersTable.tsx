@@ -31,9 +31,15 @@ function AdminSwitch({ id, isAdmin }: Pick<User, "id" | "isAdmin">) {
   return (
     <Switch
       checked={isAdmin}
-      onCheckedChange={(value) =>
-        updateIsUserAdminById({ id: id, isAdmin: value })
-      }
+      onCheckedChange={async (value) => {
+        await updateIsUserAdminById({ id: id, isAdmin: value });
+        // Tracked only once the server's admin check and the update succeeded.
+        window.pendo?.track("admin_role_changed", {
+          target_user_id: id,
+          is_admin: value,
+          change_type: value ? "granted" : "revoked",
+        });
+      }}
       disabled={isCurrentUser}
     />
   );

@@ -133,9 +133,15 @@ function NewTaskForm({
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (inputMethod: "enter_key" | "button") => {
     try {
       await handleCreateTask({ description });
+      // Tracked once the task is saved, as tasks can also be added with the Enter key (no click).
+      window.pendo?.track("task_created", {
+        input_method: inputMethod,
+        description_length: description.length,
+        total_task_count: (tasks?.length ?? 0) + 1,
+      });
       setDescription("");
     } catch (err: any) {
       window.alert("Error: " + (err.message || "Something went wrong"));
@@ -150,8 +156,31 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        // The generated schedule renders in place, so the "Generate Schedule" click alone can't tell if it succeeded.
+        window.pendo?.track("schedule_generated", {
+          hours: todaysHours,
+          input_task_count: tasks?.length ?? 0,
+          generated_task_count: response.tasks?.length ?? 0,
+          generated_subtask_count: response.taskItems?.length ?? 0,
+          high_priority_task_count:
+            response.tasks?.filter((task) => task.priority === "high").length ??
+            0,
+          total_scheduled_hours:
+            response.taskItems?.reduce(
+              (totalHours, taskItem) => totalHours + taskItem.time,
+              0,
+            ) ?? 0,
+        });
       }
     } catch (err: any) {
+      // A 402 means the user has no subscription and is out of credits (the paywall).
+      window.pendo?.track("schedule_generation_failed", {
+        failure_reason: err.statusCode === 402 ? "out_of_credits" : "error",
+        status_code: err.statusCode,
+        error_message: err.message,
+        hours: todaysHours,
+        input_task_count: tasks?.length ?? 0,
+      });
       if (err.statusCode === 402) {
         toast({
           title: "⚠️ You are out of credits!",
@@ -194,13 +223,13 @@ function NewTaskForm({
             onChange={(e) => setDescription(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                handleSubmit();
+                handleSubmit("enter_key");
               }
             }}
           />
           <Button
             type="button"
-            onClick={handleSubmit}
+            onClick={() => handleSubmit("button")}
             disabled={!description}
             variant="default"
             size="default"
