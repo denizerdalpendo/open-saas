@@ -29,6 +29,8 @@ import { cn } from "../client/utils";
 import { uploadFileWithProgress, validateFile } from "./fileUploading";
 import { ALLOWED_FILE_TYPES } from "./validation";
 
+type FileUploadStage = "validation" | "presign" | "s3_upload" | "save_record";
+
 export default function FileUploadPage() {
   const [fileKeyForS3, setFileKeyForS3] = useState<File["s3Key"]>("");
   const [uploadProgressPercent, setUploadProgressPercent] = useState<number>(0);
@@ -78,6 +80,9 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    // Declared outside of the `try` block, so that failures can be tracked with the file and the step they happened at.
+    let selectedFile: globalThis.File | undefined;
+    let uploadStage: FileUploadStage = "validation";
     try {
       e.preventDefault();
 
@@ -102,13 +107,16 @@ export default function FileUploadPage() {
         return;
       }
 
+      selectedFile = formDataFileUpload;
       const file = validateFile(formDataFileUpload);
 
+      uploadStage = "presign";
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
         fileName: file.name,
       });
 
+      uploadStage = "s3_upload";
       await uploadFileWithProgress({
         file,
         s3UploadUrl,
@@ -116,10 +124,19 @@ export default function FileUploadPage() {
         setUploadProgressPercent,
       });
 
+      uploadStage = "save_record";
       await addFileToDb({
         s3Key,
         fileType: file.type,
         fileName: file.name,
+      });
+
+      // Tracked only once the whole upload pipeline (presigned URL, S3 upload, saved record) has completed.
+      window.pendo?.track("file_uploaded", {
+        file_type: file.type,
+        file_size_bytes: file.size,
+        file_extension: getFileExtension(file.name),
+        total_file_count: (allUserFiles.data?.length ?? 0) + 1,
       });
 
       formElement.reset();
@@ -132,6 +149,12 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+      window.pendo?.track("file_upload_failed", {
+        failure_stage: uploadStage,
+        error_message: errorMessage,
+        file_type: selectedFile?.type,
+        file_size_bytes: selectedFile?.size,
+      });
       toast({
         title: "Error uploading file",
         description: errorMessage,
@@ -316,4 +339,12 @@ export default function FileUploadPage() {
       )}
     </>
   );
+}
+
+/**
+ * Returns only the file's extension (e.g. "pdf"), so that no other part of the
+ * file name, which might contain personal data, ends up in analytics.
+ */
+function getFileExtension(fileName: string): string | undefined {
+  return /\.([a-z0-9]{1,10})$/i.exec(fileName)?.[1].toLowerCase();
 }

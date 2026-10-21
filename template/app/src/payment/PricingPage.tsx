@@ -88,6 +88,12 @@ const PricingPage = () => {
       }
     } catch (error: unknown) {
       console.error(error);
+      // The user isn't sent to the checkout and sees the error Alert instead (no route change).
+      window.pendo?.track("checkout_session_failed", {
+        payment_plan_id: paymentPlanId,
+        plan_kind: paymentPlans[paymentPlanId].effect.kind,
+        error_message: error instanceof Error ? error.message : "unknown",
+      });
       if (error instanceof Error) {
         setErrorMessage(error.message);
       } else {
