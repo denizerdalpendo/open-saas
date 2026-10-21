@@ -32,6 +32,16 @@ import type {
   TaskPriority,
 } from "./schedule";
 
+// Pendo Agent Analytics ID of the AI Day Scheduler agent (`generateGptResponse`).
+const PENDO_AGENT_ID = "a1bN3-1G1EfLJ7nIqp4xQVmKxhM";
+
+function generateTrackingId(prefix: string): string {
+  // `crypto.randomUUID()` is only available in secure contexts (HTTPS or localhost).
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${prefix}_${Date.now()}`;
+}
+
 export default function DemoAppPage() {
   return (
     <div className="py-10 lg:mt-10">
@@ -129,6 +139,10 @@ function NewTaskForm({
     ],
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
+  // Every schedule generated during this visit to the page belongs to the same Pendo conversation.
+  const [pendoConversationId] = useState(() =>
+    generateTrackingId("conversation"),
+  );
 
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
@@ -145,11 +159,35 @@ function NewTaskForm({
   const handleGeneratePlan = async () => {
     try {
       setIsPlanGenerating(true);
+      window.pendo?.trackAgent?.("prompt", {
+        agentId: PENDO_AGENT_ID,
+        conversationId: pendoConversationId,
+        messageId: generateTrackingId("prompt"),
+        // The agent plans the day from the user's hours and task list (no free-text prompt).
+        content: JSON.stringify({
+          hours: todaysHours,
+          tasks: (tasks ?? []).map((task: Task) => ({
+            description: task.description,
+            time: task.time,
+          })),
+        }),
+        suggestedPrompt: false,
+        fileUploaded: false,
+      });
       const response = await generateGptResponse({
         hours: todaysHours,
       });
       if (response) {
         setResponse(response);
+        window.pendo?.trackAgent?.("agent_response", {
+          agentId: PENDO_AGENT_ID,
+          conversationId: pendoConversationId,
+          messageId: generateTrackingId("agent_response"),
+          content: JSON.stringify(response),
+          // Keep in sync with the OpenAI request in `generateScheduleWithGpt` (operations.ts).
+          modelUsed: "gpt-3.5-turbo",
+          toolsUsed: ["parseTodaysSchedule"],
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
