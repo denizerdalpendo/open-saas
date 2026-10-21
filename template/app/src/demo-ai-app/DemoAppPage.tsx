@@ -25,6 +25,11 @@ import { Label } from "../client/components/ui/label";
 import { ToastAction } from "../client/components/ui/toast";
 import { toast } from "../client/hooks/use-toast";
 import { cn } from "../client/utils";
+import {
+  createAgentConversationId,
+  trackSchedulePrompt,
+  trackScheduleResponse,
+} from "./agentTracking";
 import type {
   GeneratedSchedule,
   Task as ScheduleTask,
@@ -129,6 +134,8 @@ function NewTaskForm({
     ],
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
+  // Groups all schedule generations made during this page visit in Pendo.
+  const [agentConversationId] = useState(createAgentConversationId);
 
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
@@ -145,11 +152,20 @@ function NewTaskForm({
   const handleGeneratePlan = async () => {
     try {
       setIsPlanGenerating(true);
+      trackSchedulePrompt({
+        conversationId: agentConversationId,
+        hours: todaysHours,
+        tasks: tasks ?? [],
+      });
       const response = await generateGptResponse({
         hours: todaysHours,
       });
       if (response) {
         setResponse(response);
+        trackScheduleResponse({
+          conversationId: agentConversationId,
+          schedule: response,
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
