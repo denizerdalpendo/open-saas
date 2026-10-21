@@ -1,5 +1,6 @@
 import { type Task } from "wasp/entities";
 
+import { useAuth } from "wasp/client/auth";
 import {
   createTask,
   deleteTask,
@@ -130,6 +131,7 @@ function NewTaskForm({
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
 
+  const { data: user } = useAuth();
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
 
@@ -143,6 +145,7 @@ function NewTaskForm({
   };
 
   const handleGeneratePlan = async () => {
+    const generationStartedAt = Date.now();
     try {
       setIsPlanGenerating(true);
       const response = await generateGptResponse({
@@ -150,9 +153,34 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        // OpenAI's response isn't validated, so `tasks`/`taskItems` may be missing.
+        const generatedTasks = response.tasks ?? [];
+        const generatedTaskItems = response.taskItems ?? [];
+        const totalScheduledHours = generatedTaskItems.reduce(
+          (sum, taskItem) => sum + taskItem.time,
+          0,
+        );
+        window.pendo?.track("ai_schedule_generated", {
+          hours: todaysHours,
+          task_count: tasks?.length ?? 0,
+          generated_task_count: generatedTasks.length,
+          generated_task_item_count: generatedTaskItems.length,
+          high_priority_task_count: generatedTasks.filter(
+            (task) => task.priority === "high",
+          ).length,
+          // Rounded to avoid floating point noise (e.g. 0.1 + 0.2).
+          total_scheduled_hours: Math.round(totalScheduledHours * 100) / 100,
+          generation_duration_ms: Date.now() - generationStartedAt,
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
+        window.pendo?.track("ai_credits_exhausted", {
+          hours: todaysHours,
+          task_count: tasks?.length ?? 0,
+          subscription_status: user?.subscriptionStatus ?? "none",
+          subscription_plan: user?.subscriptionPlan ?? "none",
+        });
         toast({
           title: "⚠️ You are out of credits!",
           style: {
@@ -170,6 +198,13 @@ function NewTaskForm({
           ),
         });
       } else {
+        window.pendo?.track("ai_schedule_generation_failed", {
+          status_code: err.statusCode ?? null,
+          error_message: String(err.message || "unknown").slice(0, 100),
+          hours: todaysHours,
+          task_count: tasks?.length ?? 0,
+          generation_duration_ms: Date.now() - generationStartedAt,
+        });
         toast({
           title: "Error",
           description: err.message || "Something went wrong",

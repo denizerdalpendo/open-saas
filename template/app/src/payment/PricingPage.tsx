@@ -88,6 +88,16 @@ const PricingPage = () => {
       }
     } catch (error: unknown) {
       console.error(error);
+      window.pendo?.track("checkout_session_failed", {
+        payment_plan_id: paymentPlanId,
+        plan_kind: paymentPlans[paymentPlanId].effect.kind,
+        error_message:
+          error instanceof Error ? error.message.slice(0, 100) : "unknown",
+        status_code:
+          error instanceof Error && "statusCode" in error
+            ? error.statusCode
+            : null,
+      });
       if (error instanceof Error) {
         setErrorMessage(error.message);
       } else {
