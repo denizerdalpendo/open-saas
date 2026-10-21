@@ -58,6 +58,20 @@ export default function DemoAppPage() {
   );
 }
 
+// Pendo Agent Analytics ID of the AI Day Scheduler agent.
+const PENDO_AGENT_ID = "RSw_zz85Bi6sWm0cATaXIr8O9FE";
+// Keep in sync with `generateScheduleWithGpt` in ./operations.ts.
+const SCHEDULE_AGENT_MODEL = "gpt-3.5-turbo";
+const SCHEDULE_AGENT_TOOLS = ["parseTodaysSchedule"];
+
+// `crypto.randomUUID` only exists in secure contexts (HTTPS or localhost),
+// so fall back to a timestamp-based ID instead of breaking the page.
+function generatePendoId(prefix: string): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${prefix}_${Date.now()}`;
+}
+
 function NewTaskForm({
   handleCreateTask,
 }: {
@@ -129,6 +143,10 @@ function NewTaskForm({
     ],
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
+  // One Pendo agent conversation per visit to the scheduler.
+  const [conversationId] = useState<string>(() =>
+    generatePendoId("conversation"),
+  );
 
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
@@ -145,11 +163,34 @@ function NewTaskForm({
   const handleGeneratePlan = async () => {
     try {
       setIsPlanGenerating(true);
+      window.pendo?.trackAgent?.("prompt", {
+        agentId: PENDO_AGENT_ID,
+        conversationId,
+        messageId: generatePendoId("prompt"),
+        // The user's input to the agent: today's work hours and their tasks.
+        content: JSON.stringify({
+          hours: todaysHours,
+          tasks: (tasks ?? []).map((task) => ({
+            description: task.description,
+            time: task.time,
+          })),
+        }),
+        suggestedPrompt: false,
+        fileUploaded: false,
+      });
       const response = await generateGptResponse({
         hours: todaysHours,
       });
       if (response) {
         setResponse(response);
+        window.pendo?.trackAgent?.("agent_response", {
+          agentId: PENDO_AGENT_ID,
+          conversationId,
+          messageId: generatePendoId("agent_response"),
+          content: JSON.stringify(response),
+          modelUsed: SCHEDULE_AGENT_MODEL,
+          toolsUsed: SCHEDULE_AGENT_TOOLS,
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
