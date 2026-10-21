@@ -32,6 +32,16 @@ import type {
   TaskPriority,
 } from "./schedule";
 
+// Pendo Agent Analytics ID of the AI Day Scheduler agent (see ./operations.ts).
+const PENDO_AGENT_ID = "vkS6kcmwojahrljyz9TlZd4G70M";
+
+function generateId(prefix: string): string {
+  // `crypto.randomUUID` only exists in secure contexts (HTTPS or localhost).
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${prefix}_${Date.now()}`;
+}
+
 export default function DemoAppPage() {
   return (
     <div className="py-10 lg:mt-10">
@@ -129,6 +139,8 @@ function NewTaskForm({
     ],
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
+  // One Pendo agent conversation per page visit, shared by all generations.
+  const [conversationId] = useState(() => generateId("conversation"));
 
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
@@ -145,11 +157,34 @@ function NewTaskForm({
   const handleGeneratePlan = async () => {
     try {
       setIsPlanGenerating(true);
+      // The OpenAI prompt is built on the server from the user's tasks and
+      // hours (`generateScheduleWithGpt` in ./operations.ts), so track those.
+      const promptTasks = (tasks ?? []).map(({ description, time }: Task) => ({
+        description,
+        time,
+      }));
+      window.pendo?.trackAgent?.("prompt", {
+        agentId: PENDO_AGENT_ID,
+        conversationId,
+        messageId: generateId("prompt"),
+        content: `I will work ${todaysHours} hours today. Here are the tasks I have to complete: ${JSON.stringify(promptTasks)}`,
+        suggestedPrompt: false,
+        fileUploaded: false,
+      });
       const response = await generateGptResponse({
         hours: todaysHours,
       });
       if (response) {
         setResponse(response);
+        window.pendo?.trackAgent?.("agent_response", {
+          agentId: PENDO_AGENT_ID,
+          conversationId,
+          messageId: generateId("agent_response"),
+          content: JSON.stringify(response),
+          // Must match `generateScheduleWithGpt` in ./operations.ts.
+          modelUsed: "gpt-3.5-turbo",
+          toolsUsed: ["parseTodaysSchedule"],
+        });
       }
     } catch (err: any) {
       if (err.statusCode === 402) {
