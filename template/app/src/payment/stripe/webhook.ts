@@ -1,9 +1,11 @@
 import { type PrismaClient } from "@prisma/client";
 import express from "express";
 import type { Stripe } from "stripe";
+import type { User } from "wasp/entities";
 import { type MiddlewareConfigFn } from "wasp/server";
 import { type PaymentsWebhook } from "wasp/server/api";
 import { emailSender } from "wasp/server/email";
+import { trackPendoServerEvent } from "../../analytics/pendo";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
@@ -108,8 +110,8 @@ async function handleInvoicePaid(
   );
 
   switch (paymentPlanId) {
-    case PaymentPlanId.Credits10:
-      await updateUserCredits(
+    case PaymentPlanId.Credits10: {
+      const user = await updateUserCredits(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -117,10 +119,20 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      await trackPendoServerEvent("credits_purchased", user.id, {
+        payment_plan_id: paymentPlanId,
+        num_of_credits_purchased: paymentPlans[paymentPlanId].effect.amount,
+        credits_balance: user.credits,
+        // In the currency's smallest unit, e.g. cents.
+        amount_paid: invoice.amount_paid,
+        currency: invoice.currency,
+        payment_processor: "stripe",
+      });
       break;
+    }
     case PaymentPlanId.Pro:
-    case PaymentPlanId.Hobby:
-      await updateUserSubscription(
+    case PaymentPlanId.Hobby: {
+      const user = await updateUserSubscription(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -129,7 +141,18 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      await trackPendoServerEvent("subscription_payment_succeeded", user.id, {
+        payment_plan_id: paymentPlanId,
+        // e.g. `subscription_create` (new), `subscription_cycle` (renewal).
+        billing_reason: invoice.billing_reason,
+        // In the currency's smallest unit, e.g. cents.
+        amount_paid: invoice.amount_paid,
+        currency: invoice.currency,
+        date_paid: invoicePaidAtDate.toISOString(),
+        payment_processor: "stripe",
+      });
       break;
+    }
     default:
       assertUnreachable(paymentPlanId);
   }
@@ -173,6 +196,13 @@ async function handleCustomerSubscriptionUpdated(
     prismaUserDelegate,
   );
 
+  await trackSubscriptionUpdatedEvents(
+    event,
+    user.id,
+    paymentPlanId,
+    subscriptionStatus,
+  );
+
   if (subscription.cancel_at_period_end && user.email) {
     await emailSender.send({
       to: user.email,
@@ -180,6 +210,98 @@ async function handleCustomerSubscriptionUpdated(
       text: "We hate to see you go. Here is a sweet offer...",
       html: "We hate to see you go. Here is a sweet offer...",
     });
+  }
+}
+
+/**
+ * Stripe sends `customer.subscription.updated` for many changes (e.g. every
+ * renewal), and keeps sending it while e.g. a cancellation is pending. So we
+ * only track transitions, based on `previous_attributes`, which only contains
+ * the fields that changed with this event.
+ */
+async function trackSubscriptionUpdatedEvents(
+  event: Stripe.CustomerSubscriptionUpdatedEvent,
+  userId: User["id"],
+  paymentPlanId: PaymentPlanId,
+  subscriptionStatus: SubscriptionStatus,
+): Promise<void> {
+  const subscription = event.data.object;
+  const previousAttributes = event.data.previous_attributes;
+
+  // `items` also changes on renewals, so we compare the plans themselves.
+  const previousPrice = previousAttributes?.items?.data?.[0]?.price;
+  const previousPaymentPlanId =
+    previousPrice && findPaymentPlanIdByPriceId(previousPrice.id);
+  if (
+    previousPrice &&
+    previousPaymentPlanId &&
+    previousPaymentPlanId !== paymentPlanId
+  ) {
+    await trackPendoServerEvent("subscription_plan_changed", userId, {
+      previous_payment_plan_id: previousPaymentPlanId,
+      payment_plan_id: paymentPlanId,
+      change_direction: getPlanChangeDirection(
+        previousPrice,
+        subscription.items.data[0].price,
+      ),
+      subscription_status: subscriptionStatus,
+      payment_processor: "stripe",
+    });
+  }
+
+  if (
+    subscriptionStatus === SubscriptionStatus.CancelAtPeriodEnd &&
+    previousAttributes?.cancel_at_period_end === false
+  ) {
+    await trackPendoServerEvent("subscription_cancellation_scheduled", userId, {
+      payment_plan_id: paymentPlanId,
+      cancel_at: stripeTimestampToIsoString(subscription.cancel_at),
+      cancellation_reason: subscription.cancellation_details?.reason ?? null,
+      cancellation_feedback:
+        subscription.cancellation_details?.feedback ?? null,
+      payment_processor: "stripe",
+    });
+  }
+
+  if (
+    subscriptionStatus === SubscriptionStatus.PastDue &&
+    previousAttributes?.status !== undefined &&
+    previousAttributes.status !== "past_due"
+  ) {
+    await trackPendoServerEvent("subscription_past_due", userId, {
+      payment_plan_id: paymentPlanId,
+      previous_status: previousAttributes.status,
+      payment_processor: "stripe",
+    });
+  }
+}
+
+/**
+ * Like `getPaymentPlanIdByPaymentProcessorPlanId`, but returns `undefined`
+ * instead of throwing, e.g. for an old price that is no longer configured.
+ */
+function findPaymentPlanIdByPriceId(
+  priceId: Stripe.Price["id"],
+): PaymentPlanId | undefined {
+  try {
+    return getPaymentPlanIdByPaymentProcessorPlanId(priceId);
+  } catch {
+    return undefined;
+  }
+}
+
+function getPlanChangeDirection(
+  previousPrice: Stripe.Price,
+  newPrice: Stripe.Price,
+): "upgrade" | "downgrade" | "lateral" {
+  const previousAmount = previousPrice.unit_amount ?? 0;
+  const newAmount = newPrice.unit_amount ?? 0;
+  if (newAmount > previousAmount) {
+    return "upgrade";
+  } else if (newAmount < previousAmount) {
+    return "downgrade";
+  } else {
+    return "lateral";
   }
 }
 
@@ -235,13 +357,24 @@ async function handleCustomerSubscriptionDeleted(
   const subscription = event.data.object;
   const customerId = getCustomerId(subscription.customer);
 
-  await updateUserSubscription(
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: customerId,
       subscriptionStatus: SubscriptionStatus.Deleted,
     },
     prismaUserDelegate,
   );
+
+  await trackPendoServerEvent("subscription_ended", user.id, {
+    // We don't clear the plan when a subscription ends, so this is the ended plan.
+    payment_plan_id: user.subscriptionPlan,
+    cancellation_reason: subscription.cancellation_details?.reason ?? null,
+    ended_at: stripeTimestampToIsoString(subscription.ended_at),
+    subscription_duration_days: subscription.ended_at
+      ? Math.round((subscription.ended_at - subscription.start_date) / 86400)
+      : null,
+    payment_processor: "stripe",
+  });
 }
 
 function getCustomerId(
@@ -264,4 +397,9 @@ function getInvoicePaidAtDate(invoice: Stripe.Invoice): Date {
   // Stripe returns timestamps in seconds (Unix time),
   // so we multiply by 1000 to convert to milliseconds.
   return new Date(invoice.status_transitions.paid_at * 1000);
+}
+
+function stripeTimestampToIsoString(timestamp: number | null): string | null {
+  // Stripe timestamps are in seconds (Unix time).
+  return timestamp === null ? null : new Date(timestamp * 1000).toISOString();
 }

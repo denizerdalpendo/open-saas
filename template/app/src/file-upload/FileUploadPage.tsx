@@ -29,6 +29,12 @@ import { cn } from "../client/utils";
 import { uploadFileWithProgress, validateFile } from "./fileUploading";
 import { ALLOWED_FILE_TYPES } from "./validation";
 
+type FileUploadStage =
+  | "validation"
+  | "get_upload_url"
+  | "s3_upload"
+  | "save_to_db";
+
 export default function FileUploadPage() {
   const [fileKeyForS3, setFileKeyForS3] = useState<File["s3Key"]>("");
   const [uploadProgressPercent, setUploadProgressPercent] = useState<number>(0);
@@ -78,6 +84,10 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    const uploadStartedAt = Date.now();
+    // Declared outside of `try`, so a failure can be tracked with its step.
+    let uploadStage: FileUploadStage = "validation";
+    let selectedFile: { type: string; size: number } | undefined;
     try {
       e.preventDefault();
 
@@ -94,6 +104,10 @@ export default function FileUploadPage() {
         !(formDataFileUpload instanceof File) ||
         formDataFileUpload.size === 0
       ) {
+        window.pendo?.track("file_upload_failed", {
+          failure_stage: uploadStage,
+          error_message: "No file selected",
+        });
         toast({
           title: "No file selected",
           description: "Please select a file to upload.",
@@ -102,13 +116,16 @@ export default function FileUploadPage() {
         return;
       }
 
+      selectedFile = formDataFileUpload;
       const file = validateFile(formDataFileUpload);
 
+      uploadStage = "get_upload_url";
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
         fileName: file.name,
       });
 
+      uploadStage = "s3_upload";
       await uploadFileWithProgress({
         file,
         s3UploadUrl,
@@ -116,6 +133,7 @@ export default function FileUploadPage() {
         setUploadProgressPercent,
       });
 
+      uploadStage = "save_to_db";
       await addFileToDb({
         s3Key,
         fileType: file.type,
@@ -124,6 +142,14 @@ export default function FileUploadPage() {
 
       formElement.reset();
       allUserFiles.refetch();
+      window.pendo?.track("file_uploaded", {
+        file_type: file.type,
+        file_size_bytes: file.size,
+        file_extension: getFileExtension(file.name),
+        upload_duration_ms: Date.now() - uploadStartedAt,
+        // `allUserFiles.data` doesn't include the new file until the refetch is done.
+        total_file_count: (allUserFiles.data?.length ?? 0) + 1,
+      });
       toast({
         title: "File uploaded",
         description: "Your file has been successfully uploaded.",
@@ -132,6 +158,16 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+      window.pendo?.track("file_upload_failed", {
+        failure_stage: uploadStage,
+        error_message: errorMessage.slice(0, 100),
+        status_code:
+          error instanceof Error && "statusCode" in error
+            ? error.statusCode
+            : null,
+        file_type: selectedFile?.type,
+        file_size_bytes: selectedFile?.size,
+      });
       toast({
         title: "Error uploading file",
         description: errorMessage,
@@ -316,4 +352,13 @@ export default function FileUploadPage() {
       )}
     </>
   );
+}
+
+/**
+ * Returns e.g. "pdf" for "My File.PDF". Only returns something that looks like
+ * an extension, so no part of the file name (which may contain personal data)
+ * ends up in analytics.
+ */
+function getFileExtension(fileName: string): string | undefined {
+  return /\.([a-z0-9]{1,10})$/i.exec(fileName)?.[1].toLowerCase();
 }

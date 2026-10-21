@@ -72,6 +72,9 @@ app OpenSaaS {
     },
     onAuthFailedRedirectTo: "/login",
     onAuthSucceededRedirectTo: "/demo-app",
+    // Send server-side Pendo Track Events (`user_signed_up`, `email_verified`).
+    onAfterSignup: import { onAfterSignup } from "@src/auth/hooks",
+    onAfterEmailVerified: import { onAfterEmailVerified } from "@src/auth/hooks",
   },
 
   db: {
