@@ -6,6 +6,7 @@ import { validateEvent } from "@polar-sh/sdk/webhooks";
 import express from "express";
 import type { MiddlewareConfigFn, PrismaClient } from "wasp/server";
 import type { PaymentsWebhook } from "wasp/server/api";
+import { trackPendoEvent } from "../../server/pendoTrack";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
@@ -15,7 +16,11 @@ import {
   PaymentPlanId,
   paymentPlans,
 } from "../plans";
-import { updateUserCredits, updateUserSubscription } from "../user";
+import {
+  fetchUserPaymentStateByPaymentProcessorUserId,
+  updateUserCredits,
+  updateUserSubscription,
+} from "../user";
 
 /**
  * Polar requires a raw request to construct events successfully.
@@ -88,20 +93,45 @@ async function handleOrderPaid(
     order.productId,
   );
 
+  // Polar can redeliver the same `order.paid` event. Each order has its own
+  // creation date, so we only track an order whose date isn't saved yet.
+  const previousPaymentState =
+    await fetchUserPaymentStateByPaymentProcessorUserId(
+      order.customerId,
+      userDelegate,
+    );
+  const isNewlyRecordedPayment =
+    previousPaymentState?.datePaid?.getTime() !== order.createdAt.getTime();
+
   switch (paymentPlanId) {
-    case PaymentPlanId.Credits10:
-      await updateUserCredits(
+    case PaymentPlanId.Credits10: {
+      const numOfCreditsPurchased = paymentPlans[paymentPlanId].effect.amount;
+      const user = await updateUserCredits(
         {
           paymentProcessorUserId: order.customerId,
-          numOfCreditsPurchased: paymentPlans[paymentPlanId].effect.amount,
+          numOfCreditsPurchased,
           datePaid: order.createdAt,
         },
         userDelegate,
       );
+      if (isNewlyRecordedPayment) {
+        // Tracks a paid one-time credits purchase.
+        void trackPendoEvent({
+          event: "credits_purchased",
+          visitorId: user.id,
+          properties: {
+            payment_plan_id: paymentPlanId,
+            num_of_credits_purchased: numOfCreditsPurchased,
+            payment_processor: "polar",
+            date_paid: order.createdAt.toISOString(),
+          },
+        });
+      }
       break;
+    }
     case PaymentPlanId.Hobby:
-    case PaymentPlanId.Pro:
-      await updateUserSubscription(
+    case PaymentPlanId.Pro: {
+      const user = await updateUserSubscription(
         {
           paymentProcessorUserId: order.customerId,
           paymentPlanId,
@@ -110,7 +140,23 @@ async function handleOrderPaid(
         },
         userDelegate,
       );
+      if (isNewlyRecordedPayment) {
+        // Tracks a paid subscription order (first payment or renewal).
+        void trackPendoEvent({
+          event: "subscription_payment_completed",
+          visitorId: user.id,
+          properties: {
+            payment_plan_id: paymentPlanId,
+            subscription_status: user.subscriptionStatus,
+            previous_subscription_status:
+              previousPaymentState?.subscriptionStatus ?? null,
+            payment_processor: "polar",
+            date_paid: order.createdAt.toISOString(),
+          },
+        });
+      }
       break;
+    }
     default:
       assertUnreachable(paymentPlanId);
   }
@@ -129,7 +175,13 @@ async function handleSubscriptionUpdated(
     subscription.productId,
   );
 
-  await updateUserSubscription(
+  const previousPaymentState =
+    await fetchUserPaymentStateByPaymentProcessorUserId(
+      subscription.customer.id,
+      userDelegate,
+    );
+
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: subscription.customer.id,
       subscriptionStatus: newSubscriptionStatus,
@@ -137,6 +189,40 @@ async function handleSubscriptionUpdated(
     },
     userDelegate,
   );
+
+  // We only track status transitions, so redelivered webhooks don't fire twice.
+  if (
+    newSubscriptionStatus === OpenSaasSubscriptionStatus.CancelAtPeriodEnd &&
+    previousPaymentState?.subscriptionStatus !==
+      OpenSaasSubscriptionStatus.CancelAtPeriodEnd
+  ) {
+    // Tracks a subscription that is set to cancel at the end of the period.
+    void trackPendoEvent({
+      event: "subscription_cancellation_scheduled",
+      visitorId: user.id,
+      properties: {
+        payment_plan_id: paymentPlanId,
+        subscription_status: newSubscriptionStatus,
+        payment_processor: "polar",
+      },
+    });
+  } else if (
+    newSubscriptionStatus === OpenSaasSubscriptionStatus.Deleted &&
+    previousPaymentState?.subscriptionStatus !==
+      OpenSaasSubscriptionStatus.Deleted
+  ) {
+    // Tracks a subscription that ended (canceled, unpaid, or expired).
+    void trackPendoEvent({
+      event: "subscription_ended",
+      visitorId: user.id,
+      properties: {
+        previous_payment_plan_id:
+          previousPaymentState?.subscriptionPlan ?? null,
+        subscription_status: newSubscriptionStatus,
+        payment_processor: "polar",
+      },
+    });
+  }
 }
 
 function getOpenSaasSubscriptionStatus(

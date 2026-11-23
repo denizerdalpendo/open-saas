@@ -1,5 +1,7 @@
 import { defineUserSignupFields } from "wasp/auth/providers/types";
+import type { OnAfterSignupHook } from "wasp/server/auth";
 import { z } from "zod";
+import { trackPendoEvent } from "../server/pendoTrack";
 
 const adminEmails = process.env.ADMIN_EMAILS?.split(",") || [];
 
@@ -140,3 +142,23 @@ export function getDiscordAuthConfig() {
     scopes: ["identify", "email"],
   };
 }
+
+/**
+ * Wasp calls this hook once, right after a new user account is created.
+ * Registered as `auth.onAfterSignup` in `main.wasp`.
+ */
+export const onAfterSignup: OnAfterSignupHook = async ({
+  providerId,
+  user,
+}) => {
+  // Tracks a new account created through any auth method.
+  void trackPendoEvent({
+    event: "signup_completed",
+    visitorId: user.id,
+    properties: {
+      auth_method: providerId.providerName,
+      is_admin: user.isAdmin,
+      signup_date: user.createdAt.toISOString(),
+    },
+  });
+};

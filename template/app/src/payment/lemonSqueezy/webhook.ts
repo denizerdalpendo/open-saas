@@ -4,10 +4,12 @@ import crypto from "crypto";
 import express from "express";
 import { HttpError, type MiddlewareConfigFn } from "wasp/server";
 import { type PaymentsWebhook } from "wasp/server/api";
+import { trackPendoEvent } from "../../server/pendoTrack";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
 import { PaymentPlanId, paymentPlans, SubscriptionStatus } from "../plans";
+import { fetchUserPaymentStateById } from "../user";
 import { updateUserLemonSqueezyPaymentDetails } from "./paymentDetails";
 import {
   parseWebhookPayload,
@@ -134,6 +136,20 @@ async function handleOrderCreated(
     prismaUserDelegate,
   );
 
+  if (numOfCreditsPurchased !== undefined && datePaid !== undefined) {
+    // Tracks a paid one-time credits purchase.
+    void trackPendoEvent({
+      event: "credits_purchased",
+      visitorId: userId,
+      properties: {
+        payment_plan_id: planId,
+        num_of_credits_purchased: numOfCreditsPurchased,
+        payment_processor: "lemonsqueezy",
+        date_paid: datePaid.toISOString(),
+      },
+    });
+  }
+
   console.log(`Order ${order_number} created for user ${lemonSqueezyId}`);
 }
 
@@ -148,16 +164,27 @@ async function handleSubscriptionCreated(
   const planId = getPlanIdByVariantId(variant_id.toString());
 
   if (status === "active") {
+    const previousPaymentState = await fetchUserPaymentStateById(
+      userId,
+      prismaUserDelegate,
+    );
+    const datePaid = new Date();
     await updateUserLemonSqueezyPaymentDetails(
       {
         lemonSqueezyId,
         userId,
         subscriptionPlan: planId,
         subscriptionStatus: status as SubscriptionStatus,
-        datePaid: new Date(),
+        datePaid,
       },
       prismaUserDelegate,
     );
+    trackSubscriptionPaymentCompletedOnActivation({
+      userId,
+      planId,
+      datePaid,
+      previousSubscriptionStatus: previousPaymentState?.subscriptionStatus,
+    });
   } else {
     console.warn(
       `Unexpected status '${status}' for newly created subscription`,
@@ -184,16 +211,29 @@ async function handleSubscriptionUpdated(
   // NOTE: ability to pause or trial a subscription is something that has to be additionally configured in the lemon squeezy dashboard.
   // If you do enable these features, make sure to handle these statuses here.
   if (status === "past_due" || status === "active") {
+    const previousPaymentState = await fetchUserPaymentStateById(
+      userId,
+      prismaUserDelegate,
+    );
+    const datePaid = new Date();
     await updateUserLemonSqueezyPaymentDetails(
       {
         lemonSqueezyId,
         userId,
         subscriptionPlan: planId,
         subscriptionStatus: status as SubscriptionStatus,
-        ...(status === "active" && { datePaid: new Date() }),
+        ...(status === "active" && { datePaid }),
       },
       prismaUserDelegate,
     );
+    if (status === "active") {
+      trackSubscriptionPaymentCompletedOnActivation({
+        userId,
+        planId,
+        datePaid,
+        previousSubscriptionStatus: previousPaymentState?.subscriptionStatus,
+      });
+    }
     console.log(`Subscription updated for user ${lemonSqueezyId}`);
   }
 }
@@ -206,6 +246,11 @@ async function handleSubscriptionCancelled(
   const { customer_id } = data.attributes;
   const lemonSqueezyId = customer_id.toString();
 
+  const previousPaymentState = await fetchUserPaymentStateById(
+    userId,
+    prismaUserDelegate,
+  );
+
   await updateUserLemonSqueezyPaymentDetails(
     {
       lemonSqueezyId,
@@ -215,6 +260,23 @@ async function handleSubscriptionCancelled(
     },
     prismaUserDelegate,
   );
+
+  // We only track the status transition, so redelivered webhooks don't fire twice.
+  if (
+    previousPaymentState?.subscriptionStatus !==
+    SubscriptionStatus.CancelAtPeriodEnd
+  ) {
+    // Tracks a subscription that is set to cancel at the end of the period.
+    void trackPendoEvent({
+      event: "subscription_cancellation_scheduled",
+      visitorId: userId,
+      properties: {
+        payment_plan_id: previousPaymentState?.subscriptionPlan ?? null,
+        subscription_status: SubscriptionStatus.CancelAtPeriodEnd,
+        payment_processor: "lemonsqueezy",
+      },
+    });
+  }
 
   console.log(`Subscription cancelled for user ${lemonSqueezyId}`);
 }
@@ -227,6 +289,11 @@ async function handleSubscriptionExpired(
   const { customer_id } = data.attributes;
   const lemonSqueezyId = customer_id.toString();
 
+  const previousPaymentState = await fetchUserPaymentStateById(
+    userId,
+    prismaUserDelegate,
+  );
+
   await updateUserLemonSqueezyPaymentDetails(
     {
       lemonSqueezyId,
@@ -237,7 +304,60 @@ async function handleSubscriptionExpired(
     prismaUserDelegate,
   );
 
+  // We only track the status transition, so redelivered webhooks don't fire twice.
+  if (previousPaymentState?.subscriptionStatus !== SubscriptionStatus.Deleted) {
+    // Tracks a subscription that ended.
+    void trackPendoEvent({
+      event: "subscription_ended",
+      visitorId: userId,
+      properties: {
+        previous_payment_plan_id:
+          previousPaymentState?.subscriptionPlan ?? null,
+        subscription_status: SubscriptionStatus.Deleted,
+        payment_processor: "lemonsqueezy",
+      },
+    });
+  }
+
   console.log(`Subscription expired for user ${lemonSqueezyId}`);
+}
+
+/**
+ * Lemon Squeezy sends both `subscription_created` and `subscription_updated`
+ * (in no guaranteed order) when a subscription becomes active. We only track
+ * the transition into an active subscription, so the event fires once.
+ * Resuming a subscription that was set to cancel isn't a new payment.
+ */
+function trackSubscriptionPaymentCompletedOnActivation({
+  userId,
+  planId,
+  datePaid,
+  previousSubscriptionStatus,
+}: {
+  userId: string;
+  planId: PaymentPlanId;
+  datePaid: Date;
+  previousSubscriptionStatus: string | null | undefined;
+}) {
+  if (
+    previousSubscriptionStatus === SubscriptionStatus.Active ||
+    previousSubscriptionStatus === SubscriptionStatus.CancelAtPeriodEnd
+  ) {
+    return;
+  }
+
+  // Tracks a paid subscription that became active.
+  void trackPendoEvent({
+    event: "subscription_payment_completed",
+    visitorId: userId,
+    properties: {
+      payment_plan_id: planId,
+      subscription_status: SubscriptionStatus.Active,
+      previous_subscription_status: previousSubscriptionStatus ?? null,
+      payment_processor: "lemonsqueezy",
+      date_paid: datePaid.toISOString(),
+    },
+  });
 }
 
 async function fetchUserCustomerPortalUrl({

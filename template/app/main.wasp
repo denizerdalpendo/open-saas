@@ -72,6 +72,8 @@ app OpenSaaS {
     },
     onAuthFailedRedirectTo: "/login",
     onAuthSucceededRedirectTo: "/demo-app",
+    // Sends the Pendo `signup_completed` Track Event for each new account.
+    onAfterSignup: import { onAfterSignup } from "@src/auth/userSignupFields",
   },
 
   db: {
