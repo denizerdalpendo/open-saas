@@ -4,6 +4,7 @@ import type { Stripe } from "stripe";
 import { type MiddlewareConfigFn } from "wasp/server";
 import { type PaymentsWebhook } from "wasp/server/api";
 import { emailSender } from "wasp/server/email";
+import { trackPendoEvent } from "../../server/pendoTrack";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
@@ -13,7 +14,11 @@ import {
   paymentPlans,
   SubscriptionStatus,
 } from "../plans";
-import { updateUserCredits, updateUserSubscription } from "../user";
+import {
+  fetchUserPaymentStateByPaymentProcessorUserId,
+  updateUserCredits,
+  updateUserSubscription,
+} from "../user";
 import { stripeClient } from "./stripeClient";
 
 /**
@@ -107,20 +112,45 @@ async function handleInvoicePaid(
     getInvoicePriceId(invoice),
   );
 
+  // Stripe can redeliver the same `invoice.paid` event. Each invoice has its own
+  // paid date, so we only track an invoice whose paid date isn't saved yet.
+  const previousPaymentState =
+    await fetchUserPaymentStateByPaymentProcessorUserId(
+      customerId,
+      prismaUserDelegate,
+    );
+  const isNewlyRecordedPayment =
+    previousPaymentState?.datePaid?.getTime() !== invoicePaidAtDate.getTime();
+
   switch (paymentPlanId) {
-    case PaymentPlanId.Credits10:
-      await updateUserCredits(
+    case PaymentPlanId.Credits10: {
+      const numOfCreditsPurchased = paymentPlans[paymentPlanId].effect.amount;
+      const user = await updateUserCredits(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
-          numOfCreditsPurchased: paymentPlans[paymentPlanId].effect.amount,
+          numOfCreditsPurchased,
         },
         prismaUserDelegate,
       );
+      if (isNewlyRecordedPayment) {
+        // Tracks a paid one-time credits purchase.
+        void trackPendoEvent({
+          event: "credits_purchased",
+          visitorId: user.id,
+          properties: {
+            payment_plan_id: paymentPlanId,
+            num_of_credits_purchased: numOfCreditsPurchased,
+            payment_processor: "stripe",
+            date_paid: invoicePaidAtDate.toISOString(),
+          },
+        });
+      }
       break;
+    }
     case PaymentPlanId.Pro:
-    case PaymentPlanId.Hobby:
-      await updateUserSubscription(
+    case PaymentPlanId.Hobby: {
+      const user = await updateUserSubscription(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -129,7 +159,23 @@ async function handleInvoicePaid(
         },
         prismaUserDelegate,
       );
+      if (isNewlyRecordedPayment) {
+        // Tracks a paid subscription invoice (first payment or renewal).
+        void trackPendoEvent({
+          event: "subscription_payment_completed",
+          visitorId: user.id,
+          properties: {
+            payment_plan_id: paymentPlanId,
+            subscription_status: user.subscriptionStatus,
+            previous_subscription_status:
+              previousPaymentState?.subscriptionStatus ?? null,
+            payment_processor: "stripe",
+            date_paid: invoicePaidAtDate.toISOString(),
+          },
+        });
+      }
       break;
+    }
     default:
       assertUnreachable(paymentPlanId);
   }
@@ -168,10 +214,49 @@ async function handleCustomerSubscriptionUpdated(
     getSubscriptionPriceId(subscription),
   );
 
+  const previousPaymentState =
+    await fetchUserPaymentStateByPaymentProcessorUserId(
+      customerId,
+      prismaUserDelegate,
+    );
+
   const user = await updateUserSubscription(
     { paymentProcessorUserId: customerId, paymentPlanId, subscriptionStatus },
     prismaUserDelegate,
   );
+
+  // We only track status transitions, so redelivered webhooks don't fire twice.
+  if (
+    subscriptionStatus === SubscriptionStatus.CancelAtPeriodEnd &&
+    previousPaymentState?.subscriptionStatus !==
+      SubscriptionStatus.CancelAtPeriodEnd
+  ) {
+    // Tracks a subscription that is set to cancel at the end of the period.
+    void trackPendoEvent({
+      event: "subscription_cancellation_scheduled",
+      visitorId: user.id,
+      properties: {
+        payment_plan_id: paymentPlanId,
+        subscription_status: subscriptionStatus,
+        payment_processor: "stripe",
+      },
+    });
+  } else if (
+    subscriptionStatus === SubscriptionStatus.Deleted &&
+    previousPaymentState?.subscriptionStatus !== SubscriptionStatus.Deleted
+  ) {
+    // Tracks a subscription that ended (canceled, unpaid, or expired).
+    void trackPendoEvent({
+      event: "subscription_ended",
+      visitorId: user.id,
+      properties: {
+        previous_payment_plan_id:
+          previousPaymentState?.subscriptionPlan ?? null,
+        subscription_status: subscriptionStatus,
+        payment_processor: "stripe",
+      },
+    });
+  }
 
   if (subscription.cancel_at_period_end && user.email) {
     await emailSender.send({
@@ -235,13 +320,35 @@ async function handleCustomerSubscriptionDeleted(
   const subscription = event.data.object;
   const customerId = getCustomerId(subscription.customer);
 
-  await updateUserSubscription(
+  const previousPaymentState =
+    await fetchUserPaymentStateByPaymentProcessorUserId(
+      customerId,
+      prismaUserDelegate,
+    );
+
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: customerId,
       subscriptionStatus: SubscriptionStatus.Deleted,
     },
     prismaUserDelegate,
   );
+
+  // A `customer.subscription.updated` event can already have set the status to
+  // deleted, so we only track the transition once.
+  if (previousPaymentState?.subscriptionStatus !== SubscriptionStatus.Deleted) {
+    // Tracks a subscription that ended.
+    void trackPendoEvent({
+      event: "subscription_ended",
+      visitorId: user.id,
+      properties: {
+        previous_payment_plan_id:
+          previousPaymentState?.subscriptionPlan ?? null,
+        subscription_status: SubscriptionStatus.Deleted,
+        payment_processor: "stripe",
+      },
+    });
+  }
 }
 
 function getCustomerId(

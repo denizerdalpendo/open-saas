@@ -18,6 +18,48 @@ export async function fetchUserPaymentProcessorUserId(
   return user.paymentProcessorUserId;
 }
 
+export type UserPaymentState = Pick<
+  User,
+  "subscriptionStatus" | "subscriptionPlan" | "datePaid"
+>;
+
+/**
+ * Returns the user's payment state before a webhook updates it, so callers can
+ * detect status transitions (e.g. to avoid tracking the same event twice when
+ * a payment processor redelivers a webhook).
+ */
+export function fetchUserPaymentStateByPaymentProcessorUserId(
+  paymentProcessorUserId: NonNullable<User["paymentProcessorUserId"]>,
+  prismaUserDelegate: PrismaClient["user"],
+): Promise<UserPaymentState | null> {
+  return prismaUserDelegate.findUnique({
+    where: {
+      paymentProcessorUserId,
+    },
+    select: {
+      subscriptionStatus: true,
+      subscriptionPlan: true,
+      datePaid: true,
+    },
+  });
+}
+
+export function fetchUserPaymentStateById(
+  userId: User["id"],
+  prismaUserDelegate: PrismaClient["user"],
+): Promise<UserPaymentState | null> {
+  return prismaUserDelegate.findUnique({
+    where: {
+      id: userId,
+    },
+    select: {
+      subscriptionStatus: true,
+      subscriptionPlan: true,
+      datePaid: true,
+    },
+  });
+}
+
 interface UpdateUserPaymentProcessorUserIdArgs {
   userId: User["id"];
   paymentProcessorUserId: NonNullable<User["paymentProcessorUserId"]>;

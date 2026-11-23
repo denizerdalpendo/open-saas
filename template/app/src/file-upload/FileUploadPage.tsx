@@ -27,7 +27,14 @@ import { Progress } from "../client/components/ui/progress";
 import { toast } from "../client/hooks/use-toast";
 import { cn } from "../client/utils";
 import { uploadFileWithProgress, validateFile } from "./fileUploading";
-import { ALLOWED_FILE_TYPES } from "./validation";
+import { ALLOWED_FILE_TYPES, MAX_FILE_SIZE_BYTES } from "./validation";
+
+type FileUploadStage =
+  | "file_selection"
+  | "validation"
+  | "upload_url"
+  | "s3_upload"
+  | "save";
 
 export default function FileUploadPage() {
   const [fileKeyForS3, setFileKeyForS3] = useState<File["s3Key"]>("");
@@ -78,6 +85,8 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    let uploadStage: FileUploadStage = "file_selection";
+    let selectedFile: globalThis.File | undefined;
     try {
       e.preventDefault();
 
@@ -94,6 +103,11 @@ export default function FileUploadPage() {
         !(formDataFileUpload instanceof File) ||
         formDataFileUpload.size === 0
       ) {
+        // Tracks an upload attempt without a selected file.
+        window.pendo?.track("file_upload_failed", {
+          failure_reason: "no_file_selected",
+          failure_stage: uploadStage,
+        });
         toast({
           title: "No file selected",
           description: "Please select a file to upload.",
@@ -102,13 +116,18 @@ export default function FileUploadPage() {
         return;
       }
 
+      selectedFile = formDataFileUpload;
+      uploadStage = "validation";
       const file = validateFile(formDataFileUpload);
 
+      const uploadStartTime = performance.now();
+      uploadStage = "upload_url";
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
         fileName: file.name,
       });
 
+      uploadStage = "s3_upload";
       await uploadFileWithProgress({
         file,
         s3UploadUrl,
@@ -116,10 +135,18 @@ export default function FileUploadPage() {
         setUploadProgressPercent,
       });
 
+      uploadStage = "save";
       await addFileToDb({
         s3Key,
         fileType: file.type,
         fileName: file.name,
+      });
+
+      // Tracks a file that uploaded to S3 and saved to the database.
+      window.pendo?.track("file_upload_completed", {
+        file_type: file.type,
+        file_size_bytes: file.size,
+        upload_duration_ms: Math.round(performance.now() - uploadStartTime),
       });
 
       formElement.reset();
@@ -129,6 +156,13 @@ export default function FileUploadPage() {
         description: "Your file has been successfully uploaded.",
       });
     } catch (error) {
+      // Tracks a file upload that failed validation, the S3 upload, or the save.
+      window.pendo?.track("file_upload_failed", {
+        failure_reason: getFileUploadFailureReason(uploadStage, selectedFile),
+        failure_stage: uploadStage,
+        file_type: selectedFile?.type ?? null,
+        file_size_bytes: selectedFile?.size ?? null,
+      });
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
@@ -316,4 +350,17 @@ export default function FileUploadPage() {
       )}
     </>
   );
+}
+
+function getFileUploadFailureReason(
+  uploadStage: FileUploadStage,
+  file: globalThis.File | undefined,
+): string {
+  if (uploadStage === "validation" && file) {
+    return file.size > MAX_FILE_SIZE_BYTES
+      ? "file_too_large"
+      : "unsupported_file_type";
+  }
+
+  return `${uploadStage}_failed`;
 }

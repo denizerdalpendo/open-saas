@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "wasp/client/auth";
 import {
   getPaginatedUsers,
@@ -31,9 +31,14 @@ function AdminSwitch({ id, isAdmin }: Pick<User, "id" | "isAdmin">) {
   return (
     <Switch
       checked={isAdmin}
-      onCheckedChange={(value) =>
-        updateIsUserAdminById({ id: id, isAdmin: value })
-      }
+      onCheckedChange={async (value) => {
+        await updateIsUserAdminById({ id: id, isAdmin: value });
+        // Tracks a saved change to a user's admin permission.
+        window.pendo?.track("admin_role_changed", {
+          target_user_id: id,
+          is_admin: value,
+        });
+      }}
       disabled={isCurrentUser}
     />
   );
@@ -63,6 +68,43 @@ const UsersTable = () => {
       }),
     },
   });
+
+  // Identifies the current filter set. The email text stays in the browser and
+  // isn't sent to Pendo, only whether an email filter is set.
+  const filterSetKey = JSON.stringify({
+    emailFilter: debouncedEmailFilter ?? "",
+    isAdminFilter: isAdminFilter ?? null,
+    subscriptionStatusFilter,
+  });
+  // Starts at the default (empty) filter set, so the first load isn't tracked.
+  const lastTrackedFilterSetKeyRef = useRef(filterSetKey);
+
+  useEffect(
+    function trackFilteredResults() {
+      // Filter changes reset the table to page one, so we wait for those results.
+      if (
+        !data ||
+        skipPages !== 0 ||
+        filterSetKey === lastTrackedFilterSetKeyRef.current
+      ) {
+        return;
+      }
+      lastTrackedFilterSetKeyRef.current = filterSetKey;
+      // Tracks the results returned for a changed filter set.
+      window.pendo?.track("admin_users_filtered", {
+        has_email_filter: !!debouncedEmailFilter,
+        is_admin_filter:
+          isAdminFilter === undefined ? "both" : String(isAdminFilter),
+        subscription_status_filter: subscriptionStatusFilter.map(
+          (status) => status ?? "has_not_subscribed",
+        ),
+        total_pages: data.totalPages,
+        // Number of users on the first page of results (page size is 10).
+        results_count: data.users.length,
+      });
+    },
+    [data, filterSetKey],
+  );
 
   useEffect(
     function backToPageOne() {

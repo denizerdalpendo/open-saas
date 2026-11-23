@@ -1,3 +1,4 @@
+import { useAuth } from "wasp/client/auth";
 import { type Task } from "wasp/entities";
 
 import {
@@ -130,6 +131,7 @@ function NewTaskForm({
   });
   const [isPlanGenerating, setIsPlanGenerating] = useState<boolean>(false);
 
+  const { data: user } = useAuth();
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
 
@@ -150,8 +152,29 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        // Tracks a schedule that OpenAI returned and the server saved.
+        window.pendo?.track("schedule_generated", {
+          hours: todaysHours,
+          input_task_count: tasks?.length ?? 0,
+          scheduled_task_count: response.tasks?.length ?? 0,
+          task_item_count: response.taskItems?.length ?? 0,
+          high_priority_task_count:
+            response.tasks?.filter((task) => task.priority === "high").length ??
+            0,
+          subscription_status: user?.subscriptionStatus ?? "none",
+        });
       }
     } catch (err: any) {
+      // Tracks a failed schedule generation, including running out of credits.
+      window.pendo?.track("schedule_generation_failed", {
+        failure_reason:
+          err.statusCode === 402 ? "out_of_credits" : "request_failed",
+        status_code: err.statusCode ?? null,
+        hours: todaysHours,
+        input_task_count: tasks?.length ?? 0,
+        subscription_status: user?.subscriptionStatus ?? "none",
+        credits: user?.credits ?? null,
+      });
       if (err.statusCode === 402) {
         toast({
           title: "⚠️ You are out of credits!",
