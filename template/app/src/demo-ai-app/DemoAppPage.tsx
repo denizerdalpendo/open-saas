@@ -1,3 +1,4 @@
+import { useAuth } from "wasp/client/auth";
 import { type Task } from "wasp/entities";
 
 import {
@@ -24,7 +25,9 @@ import { Input } from "../client/components/ui/input";
 import { Label } from "../client/components/ui/label";
 import { ToastAction } from "../client/components/ui/toast";
 import { toast } from "../client/hooks/use-toast";
+import { trackPendoEvent } from "../client/pendo";
 import { cn } from "../client/utils";
+import { SubscriptionStatus } from "../payment/plans";
 import type {
   GeneratedSchedule,
   Task as ScheduleTask,
@@ -132,10 +135,18 @@ function NewTaskForm({
 
   const { data: tasks, isLoading: isTasksLoading } =
     useQuery(getAllTasksByUser);
+  const { data: user } = useAuth();
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (submitMethod: "button" | "enter_key") => {
     try {
       await handleCreateTask({ description });
+      // Pendo Track Event: fires once the task is saved, whether it was submitted with the
+      // Add Task button or the Enter key.
+      trackPendoEvent("task_created", {
+        description_length: description.length,
+        submit_method: submitMethod,
+        existing_task_count: tasks?.length ?? 0,
+      });
       setDescription("");
     } catch (err: any) {
       window.alert("Error: " + (err.message || "Something went wrong"));
@@ -150,8 +161,30 @@ function NewTaskForm({
       });
       if (response) {
         setResponse(response);
+        // Pendo Track Event: fires when OpenAI successfully returns a schedule.
+        trackPendoEvent("ai_schedule_generated", {
+          hours: todaysHours,
+          input_task_count: tasks?.length ?? 0,
+          generated_task_count: response.tasks?.length ?? 0,
+          generated_task_item_count: response.taskItems?.length ?? 0,
+          high_priority_count:
+            response.tasks?.filter((task) => task.priority === "high").length ??
+            0,
+          is_subscribed:
+            user?.subscriptionStatus === SubscriptionStatus.Active ||
+            user?.subscriptionStatus === SubscriptionStatus.CancelAtPeriodEnd,
+        });
       }
     } catch (err: any) {
+      // Pendo Track Event: fires when schedule generation fails.
+      // A 402 status means the visitor is out of credits.
+      trackPendoEvent("ai_schedule_generation_failed", {
+        error_status_code: err.statusCode,
+        failure_reason:
+          err.statusCode === 402 ? "out_of_credits" : "generation_error",
+        hours: todaysHours,
+        input_task_count: tasks?.length ?? 0,
+      });
       if (err.statusCode === 402) {
         toast({
           title: "⚠️ You are out of credits!",
@@ -194,13 +227,13 @@ function NewTaskForm({
             onChange={(e) => setDescription(e.currentTarget.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                handleSubmit();
+                handleSubmit("enter_key");
               }
             }}
           />
           <Button
             type="button"
-            onClick={handleSubmit}
+            onClick={() => handleSubmit("button")}
             disabled={!description}
             variant="default"
             size="default"

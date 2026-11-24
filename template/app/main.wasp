@@ -72,6 +72,7 @@ app OpenSaaS {
     },
     onAuthFailedRedirectTo: "/login",
     onAuthSucceededRedirectTo: "/demo-app",
+    onAfterSignup: import { onAfterSignup } from "@src/auth/hooks",
   },
 
   db: {

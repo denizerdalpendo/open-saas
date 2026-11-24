@@ -1,12 +1,18 @@
 import { type PrismaClient } from "@prisma/client";
 import express from "express";
 import type { Stripe } from "stripe";
+import { type User } from "wasp/entities";
 import { type MiddlewareConfigFn } from "wasp/server";
 import { type PaymentsWebhook } from "wasp/server/api";
 import { emailSender } from "wasp/server/email";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
+import {
+  fetchUserSubscriptionState,
+  trackPaymentCompleted,
+  trackSubscriptionStatusChanged,
+} from "../pendoTracking";
 import {
   getPaymentPlanIdByPaymentProcessorPlanId,
   PaymentPlanId,
@@ -107,9 +113,10 @@ async function handleInvoicePaid(
     getInvoicePriceId(invoice),
   );
 
+  let user: User;
   switch (paymentPlanId) {
     case PaymentPlanId.Credits10:
-      await updateUserCredits(
+      user = await updateUserCredits(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -120,7 +127,7 @@ async function handleInvoicePaid(
       break;
     case PaymentPlanId.Pro:
     case PaymentPlanId.Hobby:
-      await updateUserSubscription(
+      user = await updateUserSubscription(
         {
           paymentProcessorUserId: customerId,
           datePaid: invoicePaidAtDate,
@@ -133,6 +140,13 @@ async function handleInvoicePaid(
     default:
       assertUnreachable(paymentPlanId);
   }
+
+  await trackPaymentCompleted({
+    user,
+    paymentPlanId,
+    paymentProcessor: "stripe",
+    datePaid: invoicePaidAtDate,
+  });
 }
 
 function getInvoicePriceId(invoice: Stripe.Invoice): Stripe.Price["id"] {
@@ -168,10 +182,21 @@ async function handleCustomerSubscriptionUpdated(
     getSubscriptionPriceId(subscription),
   );
 
+  const previousSubscriptionState = await fetchUserSubscriptionState(
+    { paymentProcessorUserId: customerId },
+    prismaUserDelegate,
+  );
+
   const user = await updateUserSubscription(
     { paymentProcessorUserId: customerId, paymentPlanId, subscriptionStatus },
     prismaUserDelegate,
   );
+
+  await trackSubscriptionStatusChanged({
+    previousState: previousSubscriptionState,
+    user,
+    paymentProcessor: "stripe",
+  });
 
   if (subscription.cancel_at_period_end && user.email) {
     await emailSender.send({
@@ -235,13 +260,24 @@ async function handleCustomerSubscriptionDeleted(
   const subscription = event.data.object;
   const customerId = getCustomerId(subscription.customer);
 
-  await updateUserSubscription(
+  const previousSubscriptionState = await fetchUserSubscriptionState(
+    { paymentProcessorUserId: customerId },
+    prismaUserDelegate,
+  );
+
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: customerId,
       subscriptionStatus: SubscriptionStatus.Deleted,
     },
     prismaUserDelegate,
   );
+
+  await trackSubscriptionStatusChanged({
+    previousState: previousSubscriptionState,
+    user,
+    paymentProcessor: "stripe",
+  });
 }
 
 function getCustomerId(

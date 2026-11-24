@@ -7,6 +7,11 @@ import { type PaymentsWebhook } from "wasp/server/api";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
+import {
+  fetchUserSubscriptionState,
+  trackPaymentCompleted,
+  trackSubscriptionStatusChanged,
+} from "../pendoTracking";
 import { PaymentPlanId, paymentPlans, SubscriptionStatus } from "../plans";
 import { updateUserLemonSqueezyPaymentDetails } from "./paymentDetails";
 import {
@@ -123,7 +128,7 @@ async function handleOrderCreated(
     datePaid = new Date();
   }
 
-  await updateUserLemonSqueezyPaymentDetails(
+  const user = await updateUserLemonSqueezyPaymentDetails(
     {
       lemonSqueezyId,
       userId,
@@ -133,6 +138,17 @@ async function handleOrderCreated(
     },
     prismaUserDelegate,
   );
+
+  // Orders are created for both one-time credit purchases and new subscriptions,
+  // so this is where we track the completed payment for both.
+  if (status === "paid") {
+    await trackPaymentCompleted({
+      user,
+      paymentPlanId: planId,
+      paymentProcessor: "lemonsqueezy",
+      datePaid: datePaid ?? new Date(),
+    });
+  }
 
   console.log(`Order ${order_number} created for user ${lemonSqueezyId}`);
 }
@@ -184,7 +200,12 @@ async function handleSubscriptionUpdated(
   // NOTE: ability to pause or trial a subscription is something that has to be additionally configured in the lemon squeezy dashboard.
   // If you do enable these features, make sure to handle these statuses here.
   if (status === "past_due" || status === "active") {
-    await updateUserLemonSqueezyPaymentDetails(
+    const previousSubscriptionState = await fetchUserSubscriptionState(
+      { id: userId },
+      prismaUserDelegate,
+    );
+
+    const user = await updateUserLemonSqueezyPaymentDetails(
       {
         lemonSqueezyId,
         userId,
@@ -194,6 +215,12 @@ async function handleSubscriptionUpdated(
       },
       prismaUserDelegate,
     );
+
+    await trackSubscriptionStatusChanged({
+      previousState: previousSubscriptionState,
+      user,
+      paymentProcessor: "lemonsqueezy",
+    });
     console.log(`Subscription updated for user ${lemonSqueezyId}`);
   }
 }
@@ -206,7 +233,12 @@ async function handleSubscriptionCancelled(
   const { customer_id } = data.attributes;
   const lemonSqueezyId = customer_id.toString();
 
-  await updateUserLemonSqueezyPaymentDetails(
+  const previousSubscriptionState = await fetchUserSubscriptionState(
+    { id: userId },
+    prismaUserDelegate,
+  );
+
+  const user = await updateUserLemonSqueezyPaymentDetails(
     {
       lemonSqueezyId,
       userId,
@@ -215,6 +247,12 @@ async function handleSubscriptionCancelled(
     },
     prismaUserDelegate,
   );
+
+  await trackSubscriptionStatusChanged({
+    previousState: previousSubscriptionState,
+    user,
+    paymentProcessor: "lemonsqueezy",
+  });
 
   console.log(`Subscription cancelled for user ${lemonSqueezyId}`);
 }
@@ -227,7 +265,12 @@ async function handleSubscriptionExpired(
   const { customer_id } = data.attributes;
   const lemonSqueezyId = customer_id.toString();
 
-  await updateUserLemonSqueezyPaymentDetails(
+  const previousSubscriptionState = await fetchUserSubscriptionState(
+    { id: userId },
+    prismaUserDelegate,
+  );
+
+  const user = await updateUserLemonSqueezyPaymentDetails(
     {
       lemonSqueezyId,
       userId,
@@ -236,6 +279,12 @@ async function handleSubscriptionExpired(
     },
     prismaUserDelegate,
   );
+
+  await trackSubscriptionStatusChanged({
+    previousState: previousSubscriptionState,
+    user,
+    paymentProcessor: "lemonsqueezy",
+  });
 
   console.log(`Subscription expired for user ${lemonSqueezyId}`);
 }
