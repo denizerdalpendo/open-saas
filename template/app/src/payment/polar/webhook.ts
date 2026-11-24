@@ -4,11 +4,17 @@ import { WebhookOrderPaidPayload } from "@polar-sh/sdk/models/components/webhook
 import { WebhookSubscriptionUpdatedPayload } from "@polar-sh/sdk/models/components/webhooksubscriptionupdatedpayload.js";
 import { validateEvent } from "@polar-sh/sdk/webhooks";
 import express from "express";
+import type { User } from "wasp/entities";
 import type { MiddlewareConfigFn, PrismaClient } from "wasp/server";
 import type { PaymentsWebhook } from "wasp/server/api";
 import { requireNodeEnvVar } from "../../server/utils";
 import { assertUnreachable } from "../../shared/utils";
 import { UnhandledWebhookEventError } from "../errors";
+import {
+  fetchUserSubscriptionState,
+  trackPaymentCompleted,
+  trackSubscriptionStatusChanged,
+} from "../pendoTracking";
 import {
   getPaymentPlanIdByPaymentProcessorPlanId,
   SubscriptionStatus as OpenSaasSubscriptionStatus,
@@ -88,9 +94,10 @@ async function handleOrderPaid(
     order.productId,
   );
 
+  let user: User;
   switch (paymentPlanId) {
     case PaymentPlanId.Credits10:
-      await updateUserCredits(
+      user = await updateUserCredits(
         {
           paymentProcessorUserId: order.customerId,
           numOfCreditsPurchased: paymentPlans[paymentPlanId].effect.amount,
@@ -101,7 +108,7 @@ async function handleOrderPaid(
       break;
     case PaymentPlanId.Hobby:
     case PaymentPlanId.Pro:
-      await updateUserSubscription(
+      user = await updateUserSubscription(
         {
           paymentProcessorUserId: order.customerId,
           paymentPlanId,
@@ -114,6 +121,13 @@ async function handleOrderPaid(
     default:
       assertUnreachable(paymentPlanId);
   }
+
+  await trackPaymentCompleted({
+    user,
+    paymentPlanId,
+    paymentProcessor: "polar",
+    datePaid: order.createdAt,
+  });
 }
 
 async function handleSubscriptionUpdated(
@@ -129,7 +143,12 @@ async function handleSubscriptionUpdated(
     subscription.productId,
   );
 
-  await updateUserSubscription(
+  const previousSubscriptionState = await fetchUserSubscriptionState(
+    { paymentProcessorUserId: subscription.customer.id },
+    userDelegate,
+  );
+
+  const user = await updateUserSubscription(
     {
       paymentProcessorUserId: subscription.customer.id,
       subscriptionStatus: newSubscriptionStatus,
@@ -137,6 +156,12 @@ async function handleSubscriptionUpdated(
     },
     userDelegate,
   );
+
+  await trackSubscriptionStatusChanged({
+    previousState: previousSubscriptionState,
+    user,
+    paymentProcessor: "polar",
+  });
 }
 
 function getOpenSaasSubscriptionStatus(

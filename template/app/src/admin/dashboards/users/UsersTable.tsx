@@ -20,6 +20,7 @@ import {
 } from "../../../client/components/ui/select";
 import { Switch } from "../../../client/components/ui/switch";
 import useDebounce from "../../../client/hooks/useDebounce";
+import { trackPendoEvent } from "../../../client/pendo";
 import { SubscriptionStatus } from "../../../payment/plans";
 import LoadingSpinner from "../../layout/LoadingSpinner";
 import DropdownEditDelete from "./DropdownEditDelete";
@@ -28,12 +29,19 @@ function AdminSwitch({ id, isAdmin }: Pick<User, "id" | "isAdmin">) {
   const { data: currentUser } = useAuth();
   const isCurrentUser = currentUser?.id === id;
 
+  const handleAdminChange = async (value: boolean) => {
+    await updateIsUserAdminById({ id: id, isAdmin: value });
+    // Pendo Track Event: fires once admin access was granted or revoked successfully.
+    trackPendoEvent("admin_access_updated", {
+      is_admin: value,
+      target_user_id: id,
+    });
+  };
+
   return (
     <Switch
       checked={isAdmin}
-      onCheckedChange={(value) =>
-        updateIsUserAdminById({ id: id, isAdmin: value })
-      }
+      onCheckedChange={handleAdminChange}
       disabled={isCurrentUser}
     />
   );

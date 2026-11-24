@@ -25,9 +25,23 @@ import { Input } from "../client/components/ui/input";
 import { Label } from "../client/components/ui/label";
 import { Progress } from "../client/components/ui/progress";
 import { toast } from "../client/hooks/use-toast";
+import { trackPendoEvent } from "../client/pendo";
 import { cn } from "../client/utils";
 import { uploadFileWithProgress, validateFile } from "./fileUploading";
 import { ALLOWED_FILE_TYPES } from "./validation";
+
+type FileUploadStep =
+  | "validation"
+  | "create_upload_url"
+  | "s3_upload"
+  | "save_to_db";
+
+function getFileExtension(fileName: string): string | undefined {
+  const extensionStartIndex = fileName.lastIndexOf(".");
+  return extensionStartIndex > 0
+    ? fileName.slice(extensionStartIndex + 1).toLowerCase()
+    : undefined;
+}
 
 export default function FileUploadPage() {
   const [fileKeyForS3, setFileKeyForS3] = useState<File["s3Key"]>("");
@@ -78,6 +92,11 @@ export default function FileUploadPage() {
   }, [fileKeyForS3]);
 
   const handleUpload = async (e: FormEvent<HTMLFormElement>) => {
+    // Used by the `file_upload_failed` Pendo Track Event to tell which upload step failed.
+    let uploadStep: FileUploadStep = "validation";
+    let selectedFileType: string | undefined;
+    let selectedFileSize: number | undefined;
+
     try {
       e.preventDefault();
 
@@ -94,6 +113,11 @@ export default function FileUploadPage() {
         !(formDataFileUpload instanceof File) ||
         formDataFileUpload.size === 0
       ) {
+        // Pendo Track Event: fires when the visitor submits the form without a file.
+        trackPendoEvent("file_upload_failed", {
+          failure_reason: "no_file_selected",
+          failed_step: uploadStep,
+        });
         toast({
           title: "No file selected",
           description: "Please select a file to upload.",
@@ -102,13 +126,17 @@ export default function FileUploadPage() {
         return;
       }
 
+      selectedFileType = formDataFileUpload.type;
+      selectedFileSize = formDataFileUpload.size;
       const file = validateFile(formDataFileUpload);
 
+      uploadStep = "create_upload_url";
       const { s3UploadUrl, s3UploadFields, s3Key } = await createFileUploadUrl({
         fileType: file.type,
         fileName: file.name,
       });
 
+      uploadStep = "s3_upload";
       await uploadFileWithProgress({
         file,
         s3UploadUrl,
@@ -116,10 +144,19 @@ export default function FileUploadPage() {
         setUploadProgressPercent,
       });
 
+      uploadStep = "save_to_db";
       await addFileToDb({
         s3Key,
         fileType: file.type,
         fileName: file.name,
+      });
+
+      // Pendo Track Event: fires once the file is uploaded to S3 and saved to the database.
+      trackPendoEvent("file_upload_completed", {
+        file_type: file.type,
+        file_size: file.size,
+        file_extension: getFileExtension(file.name),
+        total_files_count: (allUserFiles.data?.length ?? 0) + 1,
       });
 
       formElement.reset();
@@ -132,6 +169,15 @@ export default function FileUploadPage() {
       console.error("Error uploading file:", error);
       const errorMessage =
         error instanceof Error ? error.message : "Error uploading file.";
+      // Pendo Track Event: fires when validation, the S3 upload, or the database save fails.
+      trackPendoEvent("file_upload_failed", {
+        failure_reason:
+          uploadStep === "validation" ? "invalid_file" : "upload_error",
+        error_message: errorMessage.substring(0, 100),
+        file_type: selectedFileType,
+        file_size: selectedFileSize,
+        failed_step: uploadStep,
+      });
       toast({
         title: "Error uploading file",
         description: errorMessage,
